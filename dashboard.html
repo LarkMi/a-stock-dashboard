@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>📊 A股分析看板 v6</title>
+<style>
+/* ===== 基础 ===== */
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;font-size:16px;padding:12px}
+h2{font-size:1.1em;margin:12px 0 8px;color:#94a3b8}
+.section{margin-bottom:8px}
+.count{font-size:.8em;color:#64748b;margin-left:8px}
+
+/* ===== 元信息 ===== */
+.meta{background:#1e293b;border-radius:12px;padding:12px;margin-bottom:16px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:.85em}
+.meta span{padding:4px 10px;background:#334155;border-radius:6px;white-space:nowrap}
+.badge{padding:4px 10px;border-radius:20px;font-weight:700}
+.bull{background:#064e3b;color:#6ee7b7}
+.bear{background:#450a0a;color:#fca5a5}
+.neutral{background:#1e3a5f;color:#93c5fd}
+
+/* ===== 准确率面板 ===== */
+.acc-panel{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:8px;margin-bottom:16px}
+.acc-card{background:#1e293b;border-radius:10px;padding:10px;text-align:center}
+.acc-card .val{font-size:1.4em;font-weight:700;color:#f8fafc}
+.acc-card .lbl{font-size:.7em;color:#64748b;margin-top:2px}
+.acc-good{color:#4ade80!important}
+.acc-warn{color:#fbbf24!important}
+.acc-bad{color:#f87171!important}
+
+/* ===== 股票行 (双行卡片) ===== */
+.stock-row{background:#1e293b;border-radius:10px;padding:10px 12px;margin-bottom:8px;cursor:pointer;transition:background .2s}
+.stock-row:active{background:#334155}
+.stock-row .line1{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.stock-row .line2{display:flex;align-items:center;gap:10px;margin-top:6px;font-size:.8em;color:#94a3b8;flex-wrap:wrap}
+.idx{font-weight:700;color:#64748b;min-width:18px}
+.name{font-weight:600;flex:1;min-width:60px}
+.price{font-weight:700;color:#f8fafc;min-width:60px;text-align:right}
+.chg-up{color:#f87171;font-weight:700}
+.chg-down{color:#4ade80;font-weight:700}
+.chg-neu{color:#94a3b8}
+
+/* ===== 预测标签 ===== */
+.pred-tag{font-size:.75em;padding:2px 8px;border-radius:12px;font-weight:600;white-space:nowrap}
+.pred-tag em{font-style:normal;font-size:.7em;opacity:.6;margin-right:2px}
+.strong_up,.strong_down{font-weight:700}
+.strong_up{background:#450a0a;color:#fca5a5}
+.up{background:#3a1a1a;color:#f87171}
+.strong_down{background:#064e3b;color:#6ee7b7}
+.down{background:#0f3a2e;color:#4ade80}
+.neutral{background:#1e293b;color:#94a3b8}
+
+.spot-tag{font-size:.75em;padding:2px 8px;border-radius:12px;font-weight:600;white-space:nowrap}
+.spot-tag em{font-style:normal;font-size:.7em;opacity:.6;margin-right:2px}
+.spot-tag.up{background:#3a1a1a;color:#f87171}
+.spot-tag.down{background:#0f3a2e;color:#4ade80}
+.spot-tag.flat{background:#1e293b;color:#94a3b8}
+
+/* ===== 置信度条 ===== */
+.conf-wrap{flex:1;min-width:60px}
+.conf-bar{height:5px;background:#334155;border-radius:3px;overflow:hidden}
+.conf-fill{height:100%;border-radius:3px}
+.conf-high{background:#4ade80}
+.conf-mid{background:#fbbf24}
+.conf-low{background:#f87171}
+
+/* ===== 图例栏 ===== */
+.legend{display:flex;flex-wrap:wrap;gap:10px;margin:10px 0;font-size:.75em;color:#64748b}
+.legend span{display:flex;align-items:center;gap:4px}
+
+/* ===== 因子栏 ===== */
+.factors{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;font-size:.75em}
+.factors span{background:#1e293b;padding:4px 10px;border-radius:6px;color:#94a3b8}
+
+/* ===== 自定义标的面板 ===== */
+.locked-panel{background:#1e293b;border-radius:12px;padding:12px;margin-bottom:16px}
+.locked-panel h3{margin-bottom:8px}
+.locked-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
+.locked-item{background:#0f172a;border-radius:8px;padding:8px;display:flex;justify-content:space-between;align-items:center;font-size:.85em}
+.locked-item .remove{color:#f87171;cursor:pointer;font-size:1.2em;padding:2px 6px}
+.search-box{display:flex;gap:8px;margin-top:8px}
+.search-box input{flex:1;background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:8px;border-radius:8px;font-size:16px}
+.search-box button{background:#1d4ed8;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:16px;cursor:pointer}
+.search-results{max-height:200px;overflow-y:auto;margin-top:8px}
+.search-results .sr-item{padding:8px;border-bottom:1px solid #334155;cursor:pointer;display:flex;justify-content:space-between}
+.search-results .sr-item:active{background:#334155}
+
+/* ===== 弹窗 ===== */
+.modal-overlay{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.7);z-index:100;justify-content:center;align-items:center}
+.modal-overlay.show{display:flex}
+.modal{background:#1e293b;border-radius:16px;padding:20px;max-width:500px;width:90%;max-height:80vh;overflow-y:auto}
+.modal h3{margin-bottom:12px}
+.modal .detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:.85em;margin-bottom:12px}
+.modal .k{color:#64748b}
+.modal .v{color:#f8fafc;text-align:right}
+.modal .reason{background:#0f172a;padding:10px;border-radius:8px;margin:8px 0;font-size:.85em}
+.modal .history-table{width:100%;font-size:.75em;border-collapse:collapse;margin-top:8px}
+.modal .history-table th,.modal .history-table td{padding:6px 4px;border-bottom:1px solid #334155;text-align:center}
+.modal .history-table th{color:#64748b}
+.modal .ok{color:#4ade80}
+.modal .fail{color:#f87171}
+.modal .close-btn{background:#334155;color:#e2e8f0;border:none;padding:8px 20px;border-radius:8px;font-size:16px;cursor:pointer;margin-top:12px;float:right}
+.modal .section-title{font-size:.9em;color:#94a3b8;margin:12px 0 6px;border-bottom:1px solid #334155;padding-bottom:4px}
+
+/* ===== 🆕 增强弹窗 ===== */
+.det-sec{margin-bottom:14px}
+.det-title{font-size:.9em;color:#94a3b8;margin:0 0 8px;border-bottom:1px solid #334155;padding-bottom:4px}
+.det-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:.82em}
+.det-grid .k{color:#64748b}
+.det-grid .v{color:#f8fafc;text-align:right}
+.det-grid .fw{font-weight:700;font-size:1.1em}
+.cf-bar{display:inline-block;width:60px;height:4px;background:#334155;border-radius:2px;vertical-align:middle;margin-left:4px}
+.cf-bar i{display:block;height:100%;border-radius:2px;background:linear-gradient(90deg,#4ade80,#fbbf24,#f87171)}
+.red{color:#f87171!important}
+.green{color:#4ade80!important}
+.sig-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:4px 0}
+.sig-label{font-size:.82em;font-weight:600;min-width:50px}
+.sig-chip{font-size:.75em;padding:2px 8px;border-radius:10px;display:inline-flex;align-items:center;gap:4px}
+.sig-chip em{font-style:normal;font-size:.7em;opacity:.6;background:rgba(255,255,255,.1);padding:1px 4px;border-radius:3px}
+.bull-chip{background:#064e3b;color:#6ee7b7}
+.bear-chip{background:#450a0a;color:#fca5a5}
+.modal .close-btn{position:sticky;bottom:0;width:100%}
+
+/* ===== 响应式 ===== */
+@media(min-width:768px){
+  body{max-width:700px;margin:0 auto}
+  .section.long,.section.short{display:grid;grid-template-columns:1fr;gap:0}
+}
+@media(min-width:1024px){
+  body{max-width:900px}
+}
+</style>
+</head>
+<body>
+<div id="meta" class="meta"></div>
+<div id="accPanel" class="acc-panel"></div>
+<div class="legend">
+  <span>📈趋势=1-3日方向</span><span>📍时点=下一时段</span>
+  <span style="color:#4ade80">🟢高置信≥65%</span>
+  <span style="color:#fbbf24">🟡中置信45-64%</span>
+  <span style="color:#f87171">🔴低置信&lt;45%</span>
+</div>
+<div id="factors" class="factors"></div>
+<div id="lockedPanel" class="locked-panel"></div>
+<div id="signalGrid"></div>
+<div id="evoLogPanel" class="locked-panel" style="margin-top:16px"></div>
+<div id="detailModal" class="modal-overlay" onclick="if(event.target===this)closeDetail()">
+  <div class="modal" id="detailContent"></div>
+</div>
+<script>
+const DATA={"meta": {"time": "2026-06-08 17:33", "breadth": "12%上涨 (普跌)", "regime": "弱趋势偏空", "long_up": 5, "short_down": 5, "total": 11, "phase": "盘后总结", "factors": ["均线趋势(权重3)", "5日动量(权重2)", "10日位置(权重1)", "量价配合(权重1)", "阶段权重:弱趋势偏空", "宽度:普跌(仅标注)", "ATR波动"], "weights": {"trend": 2.5, "pos": 1.0, "vol": 1.0, "momentum": 1.5}}, "long": [{"code": "600403.SH", "name": "大有能源", "reason": "趋势up 动量49.9% pos100.0%", "side": "long", "price": 8.95, "chg_5d": 49.9, "trend": "up", "pos": 100.0, "atr": 4.55, "pred": "strong_up", "conf": 0.85, "spot_dir": "up", "spot_conf": 0.25, "note": "score=16.0 MA5=7.47 MA10=6.31 | vol=2.66 | 📍up(25%)", "ma5": 7.47, "ma10": 6.31, "chg_1d": 10.0, "chg_3d": 29.9, "vol_ratio": 2.66, "score": 16.0, "high_10d": 8.95, "low_10d": 4.9}, {"code": "603135.SH", "name": "中重科技", "reason": "趋势up 动量42.6% pos100.0%", "side": "long", "price": 15.43, "chg_5d": 42.6, "trend": "up", "pos": 100.0, "atr": 5.16, "pred": "strong_up", "conf": 0.85, "spot_dir": "up", "spot_conf": 0.25, "note": "score=14.5 MA5=12.87 MA10=11.68 | vol=5.35 | 📍up(25%)", "ma5": 12.87, "ma10": 11.68, "chg_1d": 10.0, "chg_3d": 30.0, "vol_ratio": 5.35, "score": 14.5, "high_10d": 15.43, "low_10d": 9.99}, {"code": "600367.SH", "name": "红星发展", "reason": "趋势up 动量42.1% pos95.6%", "side": "long", "price": 52.83, "chg_5d": 42.1, "trend": "up", "pos": 95.6, "atr": 6.12, "pred": "strong_up", "conf": 0.85, "spot_dir": "up", "spot_conf": 0.25, "note": "score=13.8 MA5=46.17 MA10=39.15 | vol=1.58 | 📍up(25%)", "ma5": 46.17, "ma10": 39.15, "chg_1d": 6.7, "chg_3d": 22.1, "vol_ratio": 1.58, "score": 13.8, "high_10d": 53.99, "low_10d": 27.67}, {"code": "301319.SZ", "name": "唯特偶", "reason": "趋势up 动量32.0% pos99.6%", "side": "long", "price": 143.49, "chg_5d": 32.0, "trend": "up", "pos": 99.6, "atr": 12.9, "pred": "strong_up", "conf": 0.78, "spot_dir": "up", "spot_conf": 0.25, "note": "score=12.4 MA5=125.63 MA10=114.12 | vol=1.33 | 📍up(25%)", "ma5": 125.63, "ma10": 114.12, "chg_1d": 19.8, "chg_3d": 26.9, "vol_ratio": 1.33, "score": 12.4, "high_10d": 143.72, "low_10d": 81.27}, {"code": "301072.SZ", "name": "中捷精工", "reason": "趋势up 动量31.0% pos86.4%", "side": "long", "price": 30.99, "chg_5d": 31.0, "trend": "up", "pos": 86.4, "atr": 6.58, "pred": "strong_up", "conf": 0.74, "spot_dir": "up", "spot_conf": 0.25, "note": "score=11.8 MA5=26.8 MA10=24.87 | vol=2.2 | 📍up(25%)", "ma5": 26.8, "ma10": 24.87, "chg_1d": 9.2, "chg_3d": 21.3, "vol_ratio": 2.2, "score": 11.8, "high_10d": 32.46, "low_10d": 21.62}], "short": [{"code": "605077.SH", "name": "华康股份", "reason": "趋势down 动量-32.7% pos4.1%", "side": "short", "price": 12.81, "chg_5d": -32.7, "trend": "down", "pos": 4.1, "atr": 9.71, "pred": "strong_down", "conf": 0.69, "spot_dir": "down", "spot_conf": 0.25, "note": "score=-11.0 MA5=14.72 MA10=16.26 | vol=0.69 | 📍down(25%)", "ma5": 14.72, "ma10": 16.26, "chg_1d": -5.9, "chg_3d": -19.3, "vol_ratio": 0.69, "score": -11.0, "high_10d": 18.95, "low_10d": 12.55}, {"code": "301120.SZ", "name": "新特电气", "reason": "趋势down 动量-30.4% pos0.6%", "side": "short", "price": 19.67, "chg_5d": -30.4, "trend": "down", "pos": 0.6, "atr": 9.91, "pred": "strong_down", "conf": 0.66, "spot_dir": "down", "spot_conf": 0.25, "note": "score=-10.6 MA5=22.37 MA10=23.72 | vol=0.58 | 📍down(25%)", "ma5": 22.37, "ma10": 23.72, "chg_1d": -10.1, "chg_3d": -20.4, "vol_ratio": 0.58, "score": -10.6, "high_10d": 27.39, "low_10d": 19.62}, {"code": "603191.SH", "name": "望变电气", "reason": "趋势down 动量-28.7% pos3.7%", "side": "short", "price": 16.78, "chg_5d": -28.7, "trend": "down", "pos": 3.7, "atr": 8.41, "pred": "strong_down", "conf": 0.64, "spot_dir": "down", "spot_conf": 0.25, "note": "score=-10.2 MA5=18.86 MA10=20.07 | vol=0.52 | 📍down(25%)", "ma5": 18.86, "ma10": 20.07, "chg_1d": -6.3, "chg_3d": -17.8, "vol_ratio": 0.52, "score": -10.2, "high_10d": 22.72, "low_10d": 16.55}, {"code": "301291.SZ", "name": "明阳电气", "reason": "趋势down 动量-21.3% pos2.0%", "side": "short", "price": 44.93, "chg_5d": -21.3, "trend": "down", "pos": 2.0, "atr": 8.2, "pred": "strong_down", "conf": 0.64, "spot_dir": "down", "spot_conf": 0.25, "note": "score=-10.2 MA5=50.8 MA10=54.6 | vol=1.36 | 📍down(25%)", "ma5": 50.8, "ma10": 54.6, "chg_1d": -10.1, "chg_3d": -14.2, "vol_ratio": 1.36, "score": -10.2, "high_10d": 64.15, "low_10d": 44.54}, {"code": "002969.SZ", "name": "嘉美包装", "reason": "趋势down 动量-28.7% pos0.0%", "side": "short", "price": 15.11, "chg_5d": -28.7, "trend": "down", "pos": 0.0, "atr": 11.57, "pred": "strong_down", "conf": 0.64, "spot_dir": "down", "spot_conf": 0.25, "note": "score=-10.2 MA5=17.86 MA10=18.66 | vol=0.09 | 📍down(25%)", "ma5": 17.86, "ma10": 18.66, "chg_1d": -10.0, "chg_3d": -22.7, "vol_ratio": 0.09, "score": -10.2, "high_10d": 21.1, "low_10d": 15.11}], "custom_preds": [{"code": "603986.SH", "name": "兆易创新", "reason": "A50纳入+存储/MCU 永久锁定", "price": 474.01, "chg_5d": 2.0, "trend": "down", "pos": 24.7, "atr": 8.87, "pred": "strong_down", "conf": 0.42, "spot_dir": "down", "spot_conf": 0.37, "note": "均线空头 | 📍down(37%)", "ma5": 491.65, "ma10": 491.67, "chg_1d": -2.9, "chg_3d": -3.1, "vol_ratio": 0.8, "score": 2.5, "high_10d": 552.82, "low_10d": 448.11}], "history": {"perf": [{"code": "603986", "name": "603986", "total": 0, "correct": 0, "acc": 0, "spot_total": 37, "spot_correct": 37, "spot_acc": 1.0}, {"code": "603135", "name": "603135", "total": 0, "correct": 0, "acc": 0, "spot_total": 19, "spot_correct": 19, "spot_acc": 1.0}, {"code": "301081", "name": "301081", "total": 0, "correct": 0, "acc": 0, "spot_total": 18, "spot_correct": 18, "spot_acc": 1.0}, {"code": "002421", "name": "002421", "total": 0, "correct": 0, "acc": 0, "spot_total": 4, "spot_correct": 4, "spot_acc": 1.0}, {"code": "000626", "name": "000626", "total": 0, "correct": 0, "acc": 0, "spot_total": 18, "spot_correct": 0, "spot_acc": 0}, {"code": "000159", "name": "000159", "total": 0, "correct": 0, "acc": 0, "spot_total": 18, "spot_correct": 0, "spot_acc": 0}, {"code": "603950", "name": "603950", "total": 0, "correct": 0, "acc": 0, "spot_total": 18, "spot_correct": 18, "spot_acc": 1.0}, {"code": "603701", "name": "603701", "total": 0, "correct": 0, "acc": 0, "spot_total": 18, "spot_correct": 0, "spot_acc": 0}, {"code": "605598", "name": "605598", "total": 0, "correct": 0, "acc": 0, "spot_total": 18, "spot_correct": 18, "spot_acc": 1.0}, {"code": "301458", "name": "301458", "total": 0, "correct": 0, "acc": 0, "spot_total": 19, "spot_correct": 0, "spot_acc": 0}, {"code": "000718", "name": "000718", "total": 0, "correct": 0, "acc": 0, "spot_total": 18, "spot_correct": 0, "spot_acc": 0}, {"code": "002329", "name": "002329", "total": 0, "correct": 0, "acc": 0, "spot_total": 19, "spot_correct": 19, "spot_acc": 1.0}, {"code": "603629", "name": "603629", "total": 0, "correct": 0, "acc": 0, "spot_total": 19, "spot_correct": 19, "spot_acc": 1.0}, {"code": "605077", "name": "605077", "total": 0, "correct": 0, "acc": 0, "spot_total": 18, "spot_correct": 18, "spot_acc": 1.0}, {"code": "301528", "name": "301528", "total": 0, "correct": 0, "acc": 0, "spot_total": 19, "spot_correct": 0, "spot_acc": 0}, {"code": "000050", "name": "000050", "total": 0, "correct": 0, "acc": 0, "spot_total": 18, "spot_correct": 0, "spot_acc": 0}, {"code": "000725", "name": "000725", "total": 0, "correct": 0, "acc": 0, "spot_total": 18, "spot_correct": 0, "spot_acc": 0}, {"code": "301155", "name": "301155", "total": 0, "correct": 0, "acc": 0, "spot_total": 18, "spot_correct": 18, "spot_acc": 1.0}, {"code": "600367", "name": "600367", "total": 0, "correct": 0, "acc": 0, "spot_total": 19, "spot_correct": 19, "spot_acc": 1.0}, {"code": "600403", "name": "600403", "total": 0, "correct": 0, "acc": 0, "spot_total": 19, "spot_correct": 19, "spot_acc": 1.0}], "verified": [{"code": "600403.SH", "name": "大有能源", "pred": "strong_up", "time": "2026-06-08 15:34", "conf": 0.85, "actual": 8.95, "correct": null, "spot_correct": 1, "note": "score=16.0 MA5=6.79 MA10=5.93 | vol=5.02 | 📍up(25%)[时点:up conf=25%]"}, {"code": "600367.SH", "name": "红星发展", "pred": "strong_up", "time": "2026-06-08 15:34", "conf": 0.85, "actual": 52.83, "correct": null, "spot_correct": 1, "note": "score=14.2 MA5=42.67 MA10=36.57 | vol=1.85 | 📍up(25%)[时点:up conf=25%]"}, {"code": "301458.SZ", "name": "钧崴电子", "pred": "strong_up", "time": "2026-06-08 15:34", "conf": 0.8, "actual": 57.0, "correct": null, "spot_correct": 0, "note": "score=12.8 MA5=54.02 MA10=50.34 | vol=1.41 | 📍up(25%)[时点:up conf=25%]"}, {"code": "603135.SH", "name": "中重科技", "pred": "strong_up", "time": "2026-06-08 15:34", "conf": 0.79, "actual": 15.43, "correct": null, "spot_correct": 1, "note": "score=12.6 MA5=11.84 MA10=11.26 | vol=4.39 | 📍up(25%)[时点:up conf=25%]"}, {"code": "301528.SZ", "name": "多浦乐", "pred": "strong_up", "time": "2026-06-08 15:34", "conf": 0.77, "actual": 90.11, "correct": null, "spot_correct": 0, "note": "score=12.3 MA5=75.55 MA10=72.57 | vol=2.11 | 📍up(25%)[时点:up conf=25%]"}, {"code": "603629.SH", "name": "利通电子", "pred": "strong_down", "time": "2026-06-08 15:34", "conf": 0.62, "actual": 162.34, "correct": null, "spot_correct": 1, "note": "score=-9.9 MA5=200.15 MA10=208.95 | vol=1.24 | 📍down(25%)[时点:down conf=25%]"}, {"code": "002329.SZ", "name": "皇氏集团", "pred": "strong_down", "time": "2026-06-08 15:34", "conf": 0.61, "actual": 3.36, "correct": null, "spot_correct": 1, "note": "score=-9.8 MA5=4.06 MA10=4.2 | vol=1.83 | 📍down(25%)[时点:down conf=25%]"}, {"code": "301155.SZ", "name": "海力风电", "pred": "strong_down", "time": "2026-06-08 15:34", "conf": 0.6, "actual": 47.5, "correct": null, "spot_correct": 1, "note": "score=-9.6 MA5=57.01 MA10=61.33 | vol=1.96 | 📍down(25%)[时点:down conf=25%]"}, {"code": "605077.SH", "name": "华康股份", "pred": "strong_down", "time": "2026-06-08 15:34", "conf": 0.58, "actual": 12.81, "correct": null, "spot_correct": 1, "note": "score=-9.3 MA5=15.75 MA10=16.81 | vol=0.73 | 📍down(25%)[时点:down conf=25%]"}, {"code": "603986.SH", "name": "兆易创新", "pred": "strong_down", "time": "2026-06-08 15:34", "conf": 0.52, "actual": 474.01, "correct": null, "spot_correct": 1, "note": "均线空头 | 📍down(47%)[时点:down conf=47%]"}, {"code": "002421.SZ", "name": "达实智能", "pred": "strong_up", "time": "2026-06-08 15:34", "conf": 0.5, "actual": 5.73, "correct": null, "spot_correct": 1, "note": "均线多头; 高位超买(100.0%); 5日强动量 | 📍up(25%)[时点:up conf=25%]"}, {"code": "600403.SH", "name": "大有能源", "pred": "strong_up", "time": "2026-06-08 15:34", "conf": 0.85, "actual": 8.95, "correct": null, "spot_correct": 1, "note": "score=16.0 MA5=6.79 MA10=5.93 | vol=5.02 | 📍up(25%)[时点:up conf=25%]"}, {"code": "600367.SH", "name": "红星发展", "pred": "strong_up", "time": "2026-06-08 15:34", "conf": 0.85, "actual": 52.83, "correct": null, "spot_correct": 1, "note": "score=14.2 MA5=42.67 MA10=36.57 | vol=1.85 | 📍up(25%)[时点:up conf=25%]"}, {"code": "301458.SZ", "name": "钧崴电子", "pred": "strong_up", "time": "2026-06-08 15:34", "conf": 0.8, "actual": 57.0, "correct": null, "spot_correct": 0, "note": "score=12.8 MA5=54.02 MA10=50.34 | vol=1.41 | 📍up(25%)[时点:up conf=25%]"}, {"code": "603135.SH", "name": "中重科技", "pred": "strong_up", "time": "2026-06-08 15:34", "conf": 0.79, "actual": 15.43, "correct": null, "spot_correct": 1, "note": "score=12.6 MA5=11.84 MA10=11.26 | vol=4.39 | 📍up(25%)[时点:up conf=25%]"}, {"code": "301528.SZ", "name": "多浦乐", "pred": "strong_up", "time": "2026-06-08 15:34", "conf": 0.77, "actual": 90.11, "correct": null, "spot_correct": 0, "note": "score=12.3 MA5=75.55 MA10=72.57 | vol=2.11 | 📍up(25%)[时点:up conf=25%]"}, {"code": "603629.SH", "name": "利通电子", "pred": "strong_down", "time": "2026-06-08 15:34", "conf": 0.62, "actual": 162.34, "correct": null, "spot_correct": 1, "note": "score=-9.9 MA5=200.15 MA10=208.95 | vol=1.24 | 📍down(25%)[时点:down conf=25%]"}, {"code": "002329.SZ", "name": "皇氏集团", "pred": "strong_down", "time": "2026-06-08 15:34", "conf": 0.61, "actual": 3.36, "correct": null, "spot_correct": 1, "note": "score=-9.8 MA5=4.06 MA10=4.2 | vol=1.83 | 📍down(25%)[时点:down conf=25%]"}, {"code": "301155.SZ", "name": "海力风电", "pred": "strong_down", "time": "2026-06-08 15:34", "conf": 0.6, "actual": 47.5, "correct": null, "spot_correct": 1, "note": "score=-9.6 MA5=57.01 MA10=61.33 | vol=1.96 | 📍down(25%)[时点:down conf=25%]"}, {"code": "605077.SH", "name": "华康股份", "pred": "strong_down", "time": "2026-06-08 15:34", "conf": 0.58, "actual": 12.81, "correct": null, "spot_correct": 1, "note": "score=-9.3 MA5=15.75 MA10=16.81 | vol=0.73 | 📍down(25%)[时点:down conf=25%]"}], "total_verified": 0, "overall_acc": null, "spot_verified": 372, "spot_acc": 0.61, "dir_stats": {}}, "custom": [{"code": "603986.SH", "name": "兆易创新", "reason": "A50纳入+存储/MCU 永久锁定"}], "evo_log": [{"type": "analysis_complete", "desc": "盘中分析(13:00) | strong_up准确率2.9%(1/35)灾难性失效 | strong_down 78.6%正常 | 置信度校准倒置(高=40%低=86%) | 5/5做多5/5做空1锁定 | 趋势44.2%时点35.1%", "time": "2026-06-08 13:02"}, {"type": "systemic_bias_check", "desc": "2026-06-08 盘中定点分析 系统性偏差检查: ①33条预测0验证(全今日,update_actuals未跑) ②top5做多全部0.85/score=6.0无区分度 ③top5做空全部0.71/score=-5.0 ④仅603986(conf=0.42)有差异化 ⑤无neutral中间状态 ⑥与skill已知问题一致:strong_down回测0%,高置信段无意义", "time": "2026-06-08 10:32:57"}, {"type": "accuracy_update", "desc": "回填372条预测结果", "time": "2026-06-08 09:33:34"}, {"type": "analysis_complete", "desc": "盘后总结 | 做多5只 做空5只 自定义1只", "time": "2026-06-08 09:33:34"}, {"type": "intraday_analysis", "desc": "盘中分析(09:30) | 做多5只(均score=6.0/conf=0.85) 做空5只(均score=-5~-6/conf=0.71-0.85) 锁仓1只(603986) | 0条已验证 | ⚠️分数同质化警告:做多全6.0/做空全-5~-6 | 京东方5日+23.7%异常高", "time": "2026-06-08 09:31:33"}, {"type": "analysis_complete", "desc": "盘后总结 | 做多5只 做空5只 自定义1只", "time": "2026-06-08 08:53:54"}, {"type": "analysis_complete", "desc": "盘后总结 | 做多5只 做空5只 自定义2只", "time": "2026-06-08 07:34:44"}, {"type": "analysis_complete", "desc": "盘后总结 | 做多5只 做空5只 自定义2只", "time": "2026-06-08 07:34:32"}, {"type": "bug_fix", "desc": "修复退市股票筛选: name_map补充DuckDB stock_basic全量名称,避免退市股名称fallback到纯数字代码绕过过滤。删除600599/600421/600636三条退市股预测。", "time": "2026-06-08 07:11:00"}, {"type": "analysis_complete", "desc": "06/08 15:00盘后总结 | 趋势44.2%(34/77) strong_up 2.9%(1/35) strong_down 78.6%(33/42) 时点54.1%(157/290) | 做多5只(大有能源/红星发展/钧崴电子/中重科技/多浦乐) 做空6只(利通电子/皇氏集团/海力风电/华康股份/金富科技/兆易创新+达实智能) | strong_up系统性失败持续,做多动量熊市反转", "time": "2026-06-08 07:11:00"}]};
+const DIR_MAP={strong_up:'🚀强力看多',up:'📈看多',neutral:'➡️中性',down:'📉看空',strong_down:'💥强力看空'};
+const SPOT_MAP={up:'涨',down:'跌',flat:'平'};
+const E_LONG={strong_up:'🚀',up:'📈',neutral:'➡️'};
+const E_SHORT={strong_down:'💥',down:'📉',neutral:'➡️'};
+
+function fmt(v){if(v===null||v===undefined||v==='N/A')return'N/A';const n=Number(v);return isNaN(n)?v:n.toFixed(n<10?2:0)}
+
+(function render(){
+  // Meta
+  const m=DATA.meta;
+  let meta='<span>🕐'+m.time+'</span>';
+  meta+='<span>'+m.breadth+'</span>';
+  const rc=m.regime.includes('牛')?'bull':m.regime.includes('熊')?'bear':'neutral';
+  meta+='<span class="badge '+rc+'">'+m.regime+'</span>';
+  meta+='<span>🟢做多 '+m.long_up+'/'+DATA.long.length+'</span><span>🔴做空 '+m.short_down+'/'+DATA.short.length+'</span>';
+  meta+='<span>📍'+m.phase+'</span>';
+  document.getElementById('meta').innerHTML=meta;
+
+  renderLocked();
+
+  // Accuracy panel
+  const h=DATA.history;
+  const oa=h.overall_acc;
+  const oaClass=oa===null?'':oa>=0.6?'acc-good':oa>=0.4?'acc-warn':'acc-bad';
+  const sa=h.spot_acc;
+  const saClass=sa===null?'':sa>=0.6?'acc-good':sa>=0.4?'acc-warn':'acc-bad';
+  let acc='';
+  acc+='<div class="acc-card"><div class="val">'+(h.total_verified||0)+'</div><div class="lbl">趋势已验证</div></div>';
+  acc+='<div class="acc-card"><div class="val '+oaClass+'">'+(oa!==null?(oa*100).toFixed(0)+'%':'--')+'</div><div class="lbl">趋势准确率</div></div>';
+  acc+='<div class="acc-card"><div class="val">'+(h.spot_verified||0)+'</div><div class="lbl">时点已验证</div></div>';
+  acc+='<div class="acc-card"><div class="val '+saClass+'">'+(sa!==null?(sa*100).toFixed(0)+'%':'--')+'</div><div class="lbl">时点准确率</div></div>';
+  acc+='<div class="acc-card"><div class="val">'+(DATA.long.length+DATA.short.length+DATA.custom_preds.length)+'</div><div class="lbl">标的池</div></div>';
+  acc+='<div class="acc-card"><div class="val">'+(h.perf.length||0)+'</div><div class="lbl">有记录</div></div>';
+  if(h.dir_stats) for(const[d,s]of Object.entries(h.dir_stats)){
+    acc+='<div class="acc-card"><div class="val">'+(s.acc*100).toFixed(0)+'%</div><div class="lbl">'+(DIR_MAP[d]||d)+'</div></div>';
+  }
+  document.getElementById('accPanel').innerHTML=acc;
+
+  // Signal grid
+  let html='<div class="section long"><h2>🟢 做多 Top 5<span class="count">'+DATA.long.length+'只</span></h2>';
+  DATA.long.forEach((s,i)=>html+=row(s,i,true));
+  html+='</div><div class="section short"><h2>🔴 做空 Top 5<span class="count">'+DATA.short.length+'只</span></h2>';
+  DATA.short.forEach((s,i)=>html+=row(s,i,false));
+  html+='</div>';
+
+  if(DATA.custom_preds.length){
+    html+='<div class="section"><h2>📌 自定义标的<span class="count">'+DATA.custom_preds.length+'只</span></h2>';
+    DATA.custom_preds.forEach((s,i)=>html+=row(s,i,s.pred&&!s.pred.includes('down')));
+    html+='</div>';
+  }
+  document.getElementById('signalGrid').innerHTML=html;
+
+  // Factors
+  let fac='';
+  if(m.factors) m.factors.forEach(f=>{fac+='<span>'+f+'</span>'});
+  if(m.weights) fac+='<span>权重 T'+m.weights.trend+' P'+m.weights.pos+' V'+m.weights.vol+' M'+m.weights.momentum+'</span>';
+  document.getElementById('factors').innerHTML=fac;
+
+  renderSkillLog();
+})();
+
+function row(s,i,isLong){
+  const atr=typeof s.atr==='number'?s.atr:0;
+  const pred=s.pred||'neutral';
+  let expRet=0;
+  if(pred==='strong_up') expRet=atr;
+  else if(pred==='up') expRet=atr*0.5;
+  else if(pred==='down') expRet=-atr*0.5;
+  else if(pred==='strong_down') expRet=-atr;
+  const cc=expRet>0.5?'chg-up':expRet<-0.5?'chg-down':'chg-neu';
+  const conf=s.conf||0.3;
+  const cf=conf>=0.65?'conf-high':conf>=0.45?'conf-mid':'conf-low';
+  const em=isLong?E_LONG[pred]||'➡️':E_SHORT[pred]||'➡️';
+  const spotDir=s.spot_dir||'';
+  const spotLabel=spotDir?'<span class="spot-tag '+spotDir+'"><em>时点</em>📍'+(SPOT_MAP[spotDir]||spotDir)+'</span>':'';
+  const detail=encodeURIComponent(JSON.stringify({code:s.code,name:s.name||s.code,price:s.price,pred,conf,atr,expRet,reason:s.reason||'',note:s.note||'',trend:s.trend||'',pos:s.pos||0,chg:s.chg_5d||0,spotDir,side:s.side||'',ma5:s.ma5||0,ma10:s.ma10||0,chg_1d:s.chg_1d||0,chg_3d:s.chg_3d||0,vol_ratio:s.vol_ratio||1,score:s.score||0,high_10d:s.high_10d||s.price,low_10d:s.low_10d||s.price}));
+
+  return '<div class="stock-row" onclick="openDetail(\''+detail+'\')">'
+    +'<div class="line1">'
+    +'<span class="idx">'+(i+1)+'</span>'
+    +'<span class="name">'+em+' '+(s.name||s.code)+'</span>'
+    +'<span class="price">'+fmt(s.price)+'</span>'
+    +'<span class="'+cc+'">'+(expRet>=0?'+':'')+expRet.toFixed(1)+'%</span>'
+    +'<span class="pred-tag '+pred+'"><em>趋势</em> '+(DIR_MAP[pred]||pred)+'</span>'
+    +spotLabel
+    +'</div>'
+    +'<div class="line2">'
+    +'<span>ATR '+atr.toFixed(1)+'%</span>'
+    +'<span>'+s.trend+'</span>'
+    +'<span>pos '+s.pos+'%</span>'
+    +'<span class="conf-wrap"><div class="conf-bar"><div class="conf-fill '+cf+'" style="width:'+(conf*100)+'%"></div></div></span>'
+    +'<span style="font-size:.85em;color:#475569">'+(s.note||'').substring(0,40)+'</span>'
+    +'</div></div>';
+}
+
+function renderLocked(){
+  const panel=document.getElementById('lockedPanel');
+  let html='<h3>📌 自定义标的 <span style="font-size:.8em;color:#64748b">('+DATA.custom.length+'只)</span></h3>';
+  html+='<div class="locked-grid">';
+  DATA.custom.forEach(s=>{
+    html+='<div class="locked-item"><span>'+s.name+'('+s.code+')</span><span class="remove" onclick="event.stopPropagation();removeLocked(\''+s.code+'\')">✕</span></div>';
+  });
+  html+='</div>';
+  html+='<div class="search-box"><input id="searchInput" placeholder="搜索股票代码/名称..." oninput="doSearch()"><button onclick="doSearch()">搜索</button></div>';
+  html+='<div id="searchResults" class="search-results"></div>';
+  panel.innerHTML=html;
+}
+
+async function doSearch(){
+  const q=document.getElementById('searchInput').value.trim();
+  if(q.length<1){document.getElementById('searchResults').innerHTML='';return;}
+  const resp=await fetch('/api/search?q='+encodeURIComponent(q));
+  const data=await resp.json();
+  let html='';
+  data.forEach(s=>{
+    html+='<div class="sr-item" onclick="addLocked(\''+s.code+'\',\''+s.name+'\')"><span>'+s.name+'</span><span style="color:#64748b">'+s.code+'</span><span style="color:#4ade80">+添加</span></div>';
+  });
+  document.getElementById('searchResults').innerHTML=html||'<div style="padding:8px;color:#64748b">无匹配结果</div>';
+}
+
+async function addLocked(code,name){
+  const resp=await fetch('/api/locked',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code,name,reason:''})});
+  const d=await resp.json();
+  if(d.ok){location.reload()}else{alert(d.error||'添加失败')}
+}
+
+async function removeLocked(code){
+  if(!confirm('确认删除 '+code+' ?'))return;
+  const resp=await fetch('/api/locked?code='+encodeURIComponent(code),{method:'DELETE'});
+  const d=await resp.json();
+  if(d.ok){location.reload()}else{alert(d.error||'删除失败')}
+}
+
+let _historyCache={};
+async function openDetail(detailStr){
+  const d=JSON.parse(decodeURIComponent(detailStr));
+  const code=d.code;
+  const price=d.price, pred=d.pred, conf=d.conf||0.3;
+  const ma5=d.ma5||price, ma10=d.ma10||price;
+  const h10=d.high_10d||price, l10=d.low_10d||price;
+  const volR=d.vol_ratio||1, score=d.score||0;
+  const chg1=d.chg_1d||0, chg3=d.chg_3d||0, chg5=d.chg||0;
+
+  // 均线状态文本
+  const above=price>ma5;
+  const maState=price>ma5&&ma5>ma10?'🟢 多头排列（强势）':price<ma5&&ma5<ma10?'🔴 空头排列（弱势）':price>ma5?'🟡 站上MA5但MA5<MA10（震荡偏强）':price<ma5?'🟡 跌破MA5但MA5>MA10（震荡偏弱）':'⚪ 均线纠缠（方向不明）';
+
+  // 量价判断
+  let volNote='量能正常';
+  if(volR>2) volNote='🔥 爆量('+volR.toFixed(1)+'x)，多空分歧剧烈';
+  else if(volR>1.5) volNote='📈 放量('+volR.toFixed(1)+'x)，交投活跃';
+  else if(volR<0.5) volNote='📉 缩量('+volR.toFixed(1)+'x)，交投清淡';
+  if(volR>1.3&&chg1>0) volNote+=' → 放量上涨(需求驱动)';
+  else if(volR>1.3&&chg1<0) volNote+=' → 放量下跌(供给压力)';
+
+  // 信号拆解
+  const signals=[];
+  if(d.trend==='up') signals.push({sig:'均线多头',wt:3,dir:'bull'});
+  if(d.trend==='down') signals.push({sig:'均线空头',wt:3,dir:'bear'});
+  if(d.pos>80) signals.push({sig:'高位超买('+d.pos+'%)',wt:1,dir:'bear'});
+  if(d.pos<20) signals.push({sig:'低位超卖('+d.pos+'%)',wt:1,dir:'bull'});
+  if(volR>1.5&&chg3>0) signals.push({sig:'放量上涨(vr='+volR.toFixed(1)+')',wt:1,dir:'bull'});
+  if(volR>1.5&&chg3<0) signals.push({sig:'放量下跌(vr='+volR.toFixed(1)+')',wt:1,dir:'bear'});
+  if(chg5>10) signals.push({sig:'5日强动量('+chg5.toFixed(1)+'%)',wt:2,dir:'bull'});
+  if(chg5<-10) signals.push({sig:'5日弱动量('+chg5.toFixed(1)+'%)',wt:2,dir:'bear'});
+  const bullSigs=signals.filter(s=>s.dir==='bull');
+  const bearSigs=signals.filter(s=>s.dir==='bear');
+
+  let html='<h3>'+d.name+' <span style="color:#64748b;font-size:.8em">'+code+'</span></h3>';
+
+  // === 📊 预测概要 ===
+  html+='<div class="det-sec"><div class="det-title">📊 预测概要</div>';
+  html+='<div class="det-grid"><span class="k">现价</span><span class="v fw">'+fmt(price)+'</span>';
+  html+='<span class="k">趋势预测</span><span class="v"><span class="pred-tag '+pred+'">'+(DIR_MAP[pred]||pred)+'</span></span>';
+  html+='<span class="k">置信度</span><span class="v">'+(conf*100).toFixed(0)+'% <span class="cf-bar"><i style="width:'+(conf*100)+'%"></i></span></span>';
+  html+='<span class="k">时点</span><span class="v">📍'+(SPOT_MAP[d.spotDir]||d.spotDir||'--')+'</span>';
+  html+='<span class="k">预期日收益</span><span class="v '+(d.expRet>=0?'red':'green')+'">'+(d.expRet>=0?'+':'')+(d.expRet||0).toFixed(1)+'%</span>';
+  html+='<span class="k">10日位置</span><span class="v">'+d.pos+'% '+(d.pos>80?'⚠️高位':d.pos<20?'💡低位':'')+'</span>';
+  html+='</div></div>';
+
+  // === 📈 技术分析 ===
+  html+='<div class="det-sec"><div class="det-title">📈 技术分析</div>';
+  html+='<div class="det-grid">';
+  html+='<span class="k">均线</span><span class="v">MA5 '+fmt(ma5)+' | MA10 '+fmt(ma10)+'</span>';
+  html+='<span class="k">排列</span><span class="v">'+maState+'</span>';
+  html+='<span class="k">量价</span><span class="v">'+volNote+'</span>';
+  html+='<span class="k">波动(ATR)</span><span class="v">'+fmt(d.atr)+'% '+(d.atr>5?'⚠️高波动':d.atr>3?'📊中等':'📉低波')+'</span>';
+  html+='<span class="k">涨跌</span><span class="v">1日 <span class="'+(chg1>=0?'red':'green')+'">'+(chg1>=0?'+':'')+chg1.toFixed(1)+'%</span> | 3日 <span class="'+(chg3>=0?'red':'green')+'">'+(chg3>=0?'+':'')+chg3.toFixed(1)+'%</span> | 5日 <span class="'+(chg5>=0?'red':'green')+'">'+(chg5>=0?'+':'')+chg5.toFixed(1)+'%</span></span>';
+  html+='<span class="k">关键位</span><span class="v">支撑 '+fmt(l10)+' | 阻力 '+fmt(h10)+'</span>';
+  html+='</div></div>';
+
+  // === 🔍 信号拆解 ===
+  html+='<div class="det-sec"><div class="det-title">🔍 信号拆解 <span style="font-size:.75em;color:#64748b">(综合分: '+(score>=0?'+':'')+score.toFixed(1)+')</span></div>';
+  if(bullSigs.length){
+    html+='<div class="sig-row bull"><span class="sig-label">🟢 偏多</span>';
+    bullSigs.forEach(s=>{html+='<span class="sig-chip bull-chip">'+s.sig+'<em>w'+s.wt+'</em></span>';});
+    html+='</div>';
+  }
+  if(bearSigs.length){
+    html+='<div class="sig-row bear"><span class="sig-label">🔴 偏空</span>';
+    bearSigs.forEach(s=>{html+='<span class="sig-chip bear-chip">'+s.sig+'<em>w'+s.wt+'</em></span>';});
+    html+='</div>';
+  }
+  if(!bullSigs.length&&!bearSigs.length){html+='<div style="color:#64748b;padding:4px 0">无明显方向信号</div>';}
+  html+='</div>';
+
+  // === 📋 入选原因 ===
+  if(d.reason){
+    html+='<div class="det-sec"><div class="det-title">📋 入选原因</div>';
+    html+='<div class="reason">'+d.reason+'</div></div>';
+  }
+
+  // === 📜 历史验证 ===
+  html+='<div class="det-sec"><div class="det-title">📜 历史验证 <span style="font-size:.75em;color:#64748b">(最近20条)</span></div>';
+  if(!_historyCache[code]){
+    try{
+      const resp=await fetch('/api/history?code='+encodeURIComponent(code));
+      _historyCache[code]=await resp.json();
+    }catch(e){_historyCache[code]=[]}
+  }
+  const hist=_historyCache[code]||[];
+  if(hist.length){
+    html+='<table class="history-table"><tr><th>时间</th><th>趋势</th><th>实际价</th><th>趋势✓</th><th>时点✓</th></tr>';
+    hist.forEach(r=>{
+      const tOk=r.correct===1?'ok':r.correct===0?'fail':'';
+      const sOk=r.spot_correct===1?'ok':r.spot_correct===0?'fail':'';
+      html+='<tr><td>'+r.time+'</td><td>'+(DIR_MAP[r.pred]||r.pred)+'</td><td>'+fmt(r.actual)+'</td><td class="'+tOk+'">'+(r.correct===1?'✅':r.correct===0?'❌':'--')+'</td><td class="'+sOk+'">'+(r.spot_correct===1?'✅':r.spot_correct===0?'❌':'--')+'</td></tr>';
+    });
+    html+='</table>';
+  }else{
+    html+='<div style="color:#64748b;padding:8px">暂无历史验证数据（需交易日产生真实数据后回填）</div>';
+  }
+  html+='</div>';
+
+  // === 💡 操作参考 ===
+  html+='<div class="det-sec"><div class="det-title">💡 操作参考</div>';
+  html+='<div class="det-grid">';
+  html+='<span class="k">支撑位</span><span class="v green">'+fmt(l10)+' (10日低)</span>';
+  html+='<span class="k">阻力位</span><span class="v red">'+fmt(h10)+' (10日高)</span>';
+  const atrVal=(d.atr||0)*price/100;
+  html+='<span class="k">ATR幅度</span><span class="v">±'+fmt(atrVal)+' (±'+fmt(d.atr||0)+'%)</span>';
+  html+='<span class="k">风控参考</span><span class="v">跌破 '+fmt(l10)+' 且无承接→重新评估</span>';
+  html+='</div></div>';
+
+  html+='<button class="close-btn" onclick="closeDetail()">关闭</button>';
+  document.getElementById('detailContent').innerHTML=html;
+  document.getElementById('detailModal').classList.add('show');
+}
+
+function closeDetail(){document.getElementById('detailModal').classList.remove('show')}
+
+function renderSkillLog(){
+  const log=DATA.evo_log||[];
+  if(!log.length)return;
+  let html='<h3>🔧 自进化日志</h3>';
+  log.forEach(l=>{
+    html+='<div style="font-size:.8em;padding:4px 0;border-bottom:1px solid #334155">';
+    html+='<span style="color:#64748b">'+l.time+'</span> ';
+    html+='<span style="background:#334155;padding:1px 6px;border-radius:4px;margin-right:4px">'+l.event+'</span>';
+    html+='<span>'+l.desc+'</span></div>';
+  });
+  document.getElementById('evoLogPanel').innerHTML=html;
+}
+</script>
+</body></html>

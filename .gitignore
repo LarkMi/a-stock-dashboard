@@ -1,0 +1,23 @@
+# Sensitive data
+.env
+*.token
+*_token*
+credentials/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Data (too large for git)
+*.duckdb
+*.db
+data/
+
+# Local paths
+C:/Users/
+~/AppData/
+
+# IDE
+.vscode/
+.idea/
