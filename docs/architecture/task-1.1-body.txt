@@ -1,0 +1,35 @@
+## 任务：将技术因子提取为独立模块
+
+### 背景
+当前 market_watcher.py 中 calc_indicators() 和 screen_all_stocks() 的技术因子计算逻辑分散且耦合。需要提取到独立模块。
+
+### 产出文件
+C:/Users/LarkMi/projects/a-stock-dashboard/scripts/tech_factors.py (新建)
+
+### 要求
+
+1. 从现有代码提取以下因子到独立函数：
+   - 均线趋势因子 (weight=3): MA5/MA10 多头/空头排列判断
+   - 动量因子 (weight=2): 5日涨跌幅连续评分
+   - 位置因子 (weight=1): 10日高低位百分比
+   - 量价因子 (weight=1): 放量涨/跌判断
+   - ATR波动率因子 (NEW, weight=1.5): 14日ATR百分比
+   - 筹码分布因子 (NEW, weight=1): 简单版(近期成交量加权均价 vs 现价偏离)
+   - 支撑阻力位因子 (NEW, weight=1): 距10日高/低距离
+
+2. 接口规范：函数 compute_tech_factors(conn_duck, ts_code, cutoff_date=None)
+   返回dict: trend/momentum/position/volume/atr/distribution/sr
+   每个值范围 -5.0 ~ +5.0，正=偏多，负=偏空
+
+3. 数据源: DuckDB (daily表, ts_code过滤, 最近15日数据)
+
+4. 代码风格: 精简中文注释，每个因子独立函数，可单独测试
+
+### 约束
+- Python 3.14, Windows
+- DuckDB路径自动发现（参考现有 market_watcher.py 的 _DB_DIR 逻辑）
+- 不使用额外pip包（仅 duckdb, pandas, numpy）
+
+### 参考
+- 现有代码: C:/Users/LarkMi/projects/a-stock-dashboard/scripts/market_watcher.py (calc_indicators, screen_all_stocks)
+- 架构文档: C:/Users/LarkMi/projects/a-stock-dashboard/docs/architecture/architecture.md

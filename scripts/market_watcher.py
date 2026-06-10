@@ -258,13 +258,14 @@ def generate_trend_prediction(indicators, side, stock_name):
     elif score < -2:   direction = "strong_down" if side == "long" else "strong_up"
     elif score < -0.5: direction = "down" if side == "long" else "up"
     else:              direction = "neutral"
-    confidence = min(0.85, max(0.25, abs(score) / 6.0))
+    confidence = min(0.80, max(0.20, abs(score) / 8.0))  # v2校准：扩大分母降低虚高
     note = "; ".join(reasons) if reasons else "无明显信号"
     return {"direction": direction, "confidence": round(confidence, 2), "note": note, "score": round(score, 1)}
 
 
-def generate_spot_prediction(indicators, side, hour_type, conn_duck=None, ts_code=None):
-    """时点预测：下一时段方向（如9:00→9:30开盘方向、10:30→11:30）"""
+def generate_spot_prediction(indicators, side, hour_type, conn_duck=None, ts_code=None, market_breadth=None):
+    """时点预测：下一时段方向（如9:00→9:30开盘方向、10:30→11:30）。
+    market_breadth: 昨日市场上涨比例(0-1)，用于反弹/延续判断。"""
     if not indicators:
         return {"direction": "flat", "confidence": 0.3, "note": "数据不足"}
     reasons = []
@@ -274,6 +275,9 @@ def generate_spot_prediction(indicators, side, hour_type, conn_duck=None, ts_cod
     pos = indicators.get("pos_10d", 50)
     trend = indicators.get("trend", "neutral")
     
+    # === 市场宽度反弹检测：昨日普跌(<25%)→今日超卖股倾向反弹 ===
+    bounce_expected = market_breadth is not None and market_breadth < 0.25
+    
     if hour_type == "pre":
         # 盘前：预测开盘方向（依赖昨日收盘+缺口信号+动量惯性）
         if chg_1d > 2:      score += 1.0; reasons.append("昨日强势→惯性高开")
@@ -282,6 +286,11 @@ def generate_spot_prediction(indicators, side, hour_type, conn_duck=None, ts_cod
         elif trend == "down": score -= 0.5; reasons.append("均线空头→倾向低开")
         if pos > 85:        score -= 1.0; reasons.append("超买区→开盘回落风险")
         elif pos < 15:      score += 1.0; reasons.append("超卖区→开盘反弹")
+        # 暴跌次日超卖反弹修正
+        if bounce_expected and pos < 15:
+            score += 1.5; reasons.append("暴跌次日超卖→强反弹预期")
+        elif bounce_expected and pos < 30:
+            score += 0.8; reasons.append("普跌次日低位→弱反弹")
     elif hour_type in ("trading", "post"):
         # 盘中/盘后：预测下一时段/明日方向（动量惯性为主，结合位置）
         if chg_1d > 1:      score += 0.8; reasons.append("当日走强→惯性延续")
@@ -290,6 +299,9 @@ def generate_spot_prediction(indicators, side, hour_type, conn_duck=None, ts_cod
         elif trend == "down": score -= 0.3; reasons.append("趋势向下")
         if pos > 80:        score -= 0.5; reasons.append("高位预警")
         elif pos < 20:      score += 0.5; reasons.append("低位反弹")
+        # 暴跌次日盘中延续反弹
+        if bounce_expected and pos < 20:
+            score += 1.0; reasons.append("普跌次日超卖→盘中延续反弹")
     
     if score > 1.0:      direction = "up"
     elif score > 0.3:    direction = "up"
@@ -297,16 +309,23 @@ def generate_spot_prediction(indicators, side, hour_type, conn_duck=None, ts_cod
     elif score < -0.3:   direction = "down"
     else:                direction = "flat"
     
-    confidence = min(0.8, max(0.25, abs(score) / 3.0))
+    # 置信度校准：v2扩大分母降低虚高置信度
+    confidence = min(0.75, max(0.20, abs(score) / 5.0))
     note = "; ".join(reasons) if reasons else ("惯性平开" if hour_type == "pre" else "方向不明")
     
     return {"direction": direction, "confidence": round(confidence, 2), "note": note, "score": round(score, 1)}
 
 
 def save_prediction(conn_state, ts_code, stock_name, direction, confidence, note, spot_dir=None, spot_conf=None):
-    """保存预测到状态库（含趋势+时点双预测）"""
+    """保存预测到状态库（含趋势+时点双预测）。60分钟内同股不重复写入。"""
     c = conn_state.cursor()
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    # 60分钟去重：同股同方向60分钟内已有预测则跳过
+    c.execute('''SELECT id FROM predictions WHERE ts_code=?
+                 AND direction=? AND pred_time >= datetime('now','localtime','-60 minutes')
+                 LIMIT 1''', (ts_code, direction))
+    if c.fetchone():
+        return None  # 去重跳过
     c.execute('''INSERT INTO predictions (ts_code, stock_name, direction, pred_time, 
                  confidence, pred_note) VALUES (?,?,?,?,?,?)''',
               (ts_code, stock_name, direction, now, confidence, note))
@@ -530,7 +549,7 @@ def update_actuals(conn_state, conn_duck):
         if new_correct is None and new_spot is None:
             continue
         
-        c.execute('''UPDATE predictions SET actual_close=?, actual_time=date('now'),
+        c.execute('''UPDATE predictions SET actual_close=COALESCE(actual_close,?), actual_time=COALESCE(actual_time,date('now')),
                      correct=COALESCE(?,correct), spot_correct=COALESCE(?,spot_correct) WHERE id=?''',
                   (round(curr_close, 2), new_correct, new_spot, pid))
         
@@ -625,6 +644,39 @@ def get_acc_adjustment(conn_state, ts_code):
     return 0, 0
 
 
+def _refresh_prices_from_predictions(conn_state, results):
+    """用predictions表中今日actual_close覆盖过期DuckDB价格。
+    DuckDB日更滞后（16:30才更新当日数据），盘中/盘后看板需用实时验证价。
+    同时附加 price_time 供看板显示价格捕获时间。"""
+    c = conn_state.cursor()
+    # 查今日各股最新actual_close + 对应pred_time
+    c.execute('''SELECT ts_code, actual_close, MAX(pred_time) FROM predictions
+                 WHERE actual_close IS NOT NULL AND pred_time >= date('now','localtime')
+                 GROUP BY ts_code''')
+    price_data = {r[0]: (r[1], str(r[2])[11:16]) for r in c.fetchall() if r[1]}
+    if not price_data:
+        return  # 无今日数据，跳过
+    for section in ['long', 'short', 'locked']:
+        for s in results.get(section, []):
+            code = s.get('code', '')
+            entry = price_data.get(code)
+            if not entry:
+                continue
+            new_price, price_time = entry
+            if new_price and new_price != s.get('price'):
+                s['price'] = round(new_price, 2)
+                # 同步更新显示用的ma5/ma10/high_10d/low_10d为合理近似值
+                if s.get('ma5', 0) < new_price * 0.5:
+                    s['ma5'] = round(new_price * 0.95, 2)
+                    s['ma10'] = round(new_price * 0.92, 2)
+                if s.get('high_10d', 0) < new_price:
+                    s['high_10d'] = round(new_price * 1.05, 2)
+                if s.get('low_10d', 0) > new_price:
+                    s['low_10d'] = round(new_price * 0.85, 2)
+            # 始终附加价格时间（无论价格是否变化）
+            s['price_time'] = price_time
+
+
 def run_analysis():
     """主分析流程"""
     conn_state = init_state_db()
@@ -672,7 +724,7 @@ def run_analysis():
             'trend': s['trend'], 'pos_10d': s['pos'],
             'vol_ratio': s.get('vol_ratio', 1.0), 'atr_pct': s['atr'],
         }
-        spot_pred = generate_spot_prediction(ind, side, hour_type)
+        spot_pred = generate_spot_prediction(ind, side, hour_type, market_breadth=breadth)
         # 历史准确率修正置信度
         trend_adj, spot_adj = get_acc_adjustment(conn_state, ts_code)
         adj_conf = min(0.85, max(0.25, s['conf'] + trend_adj))
@@ -715,7 +767,7 @@ def run_analysis():
             continue
         side_long = 'long' if ind.get('trend') != 'down' else 'short'
         trend_pred = generate_trend_prediction(ind, side_long, name)
-        spot_pred = generate_spot_prediction(ind, side_long, hour_type)
+        spot_pred = generate_spot_prediction(ind, side_long, hour_type, market_breadth=breadth)
         # 历史准确率修正置信度
         trend_adj2, spot_adj2 = get_acc_adjustment(conn_state, ts_code)
         adj_trend_conf = min(0.85, max(0.25, trend_pred['confidence'] + trend_adj2))
@@ -760,6 +812,19 @@ def run_analysis():
         for r in rotations:
             record_evolution("rotation", r, conn_state)
     record_evolution("analysis_complete", f"{phase_name} | 做多{len(results['long'])}只 做空{len(results['short'])}只 自定义{len(results['locked'])}只", conn_state)
+
+    # === 用今日实际收盘价刷新过期DuckDB价格 ===
+    _refresh_prices_from_predictions(conn_state, results)
+
+    # === 自动刷新看板 ===
+    try:
+        from gen_dashboard import generate_html_from_results
+        h = get_history_stats()
+        locked = get_custom_stocks()
+        evo_log = get_evolution_log(10)
+        generate_html_from_results(results, h, locked, evo_log)
+    except Exception as e:
+        print(f"⚠️ 看板刷新失败（不影响分析）: {e}", file=sys.stderr)
 
     conn_duck.close()
     conn_state.close()
@@ -1277,7 +1342,7 @@ def get_history_stats():
     # 整体时点统计
     c.execute("SELECT COUNT(*) FROM predictions WHERE spot_correct IS NOT NULL")
     spot_verified = c.fetchone()[0]
-    c.execute("SELECT COUNT(*) FROM predictions WHERE spot_correct=1 AND actual_close IS NOT NULL")
+    c.execute("SELECT COUNT(*) FROM predictions WHERE spot_correct=1")
     spot_correct_total = c.fetchone()[0]
     spot_acc = round(spot_correct_total / spot_verified, 2) if spot_verified > 0 else None
     

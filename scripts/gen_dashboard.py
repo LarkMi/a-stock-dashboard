@@ -10,12 +10,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 OUTPUT = r"C:\Users\LarkMi\AppData\Local\hermes\dashboard.html"
 
 def generate():
-    from market_watcher import run_analysis, get_history_stats, get_custom_stocks, get_evolution_log
-    r = run_analysis()
-    h = get_history_stats()
-    locked = get_custom_stocks()
-    evo_log = get_evolution_log(10)
+    """完整流程：跑分析 + 生成看板（供cron/manual调用）。
+    run_analysis() 已内置自动生成看板，此处仅做入口包装。"""
+    from market_watcher import run_analysis
+    return run_analysis()  # 内部已调用 generate_html_from_results
 
+
+def generate_html_from_results(r, h, locked, evo_log):
+    """仅生成HTML（不跑分析），供market_watcher.run_analysis()结束后调用"""
     long_up = sum(1 for s in r['long'] if 'up' in str(s.get('pred','')))
     short_down = sum(1 for s in r['short'] if 'down' in str(s.get('pred','')))
     custom_preds = r.get('locked', [])
@@ -48,7 +50,9 @@ def generate():
     print(f'✅ 看板已生成: {OUTPUT}')
     print(f'   时间: {data["meta"]["time"]}')
     print(f'   做多: {long_up}/{len(r["long"])}看多 | 做空: {short_down}/{len(r["short"])}看空 | 阶段: {data["meta"]["regime"]}')
-    print(f'   历史: {h["total_verified"]}条趋势已验证 | 趋势准确率: {h["overall_acc"] or "N/A"} | 时点: {h["spot_verified"]}条/{h["spot_acc"] or "N/A"}')
+    trend_label = f'{h["total_verified"]}条/{h["overall_acc"] or "N/A"}'
+    spot_label = f'{h["spot_verified"]}条/{h["spot_acc"] or "N/A"}'
+    print(f'   趋势: {trend_label} | 时点: {spot_label}')
     return OUTPUT
 
 
@@ -278,13 +282,13 @@ function row(s,i,isLong){
   const em=isLong?E_LONG[pred]||'➡️':E_SHORT[pred]||'➡️';
   const spotDir=s.spot_dir||'';
   const spotLabel=spotDir?'<span class="spot-tag '+spotDir+'"><em>时点</em>📍'+(SPOT_MAP[spotDir]||spotDir)+'</span>':'';
-  const detail=encodeURIComponent(JSON.stringify({code:s.code,name:s.name||s.code,price:s.price,pred,conf,atr,expRet,reason:s.reason||'',note:s.note||'',trend:s.trend||'',pos:s.pos||0,chg:s.chg_5d||0,spotDir,side:s.side||'',ma5:s.ma5||0,ma10:s.ma10||0,chg_1d:s.chg_1d||0,chg_3d:s.chg_3d||0,vol_ratio:s.vol_ratio||1,score:s.score||0,high_10d:s.high_10d||s.price,low_10d:s.low_10d||s.price}));
+  const detail=encodeURIComponent(JSON.stringify({code:s.code,name:s.name||s.code,price:s.price,price_time:s.price_time||'',pred,conf,atr,expRet,reason:s.reason||'',note:s.note||'',trend:s.trend||'',pos:s.pos||0,chg:s.chg_5d||0,spotDir,side:s.side||'',ma5:s.ma5||0,ma10:s.ma10||0,chg_1d:s.chg_1d||0,chg_3d:s.chg_3d||0,vol_ratio:s.vol_ratio||1,score:s.score||0,high_10d:s.high_10d||s.price,low_10d:s.low_10d||s.price}));
 
   return '<div class="stock-row" onclick="openDetail(\''+detail+'\')">'
     +'<div class="line1">'
     +'<span class="idx">'+(i+1)+'</span>'
     +'<span class="name">'+em+' '+(s.name||s.code)+'</span>'
-    +'<span class="price">'+fmt(s.price)+'</span>'
+    +'<span class="price">'+fmt(s.price)+'</span>'+(s.price_time?'<span style="font-size:.62em;color:#64748b;margin-left:2px">'+s.price_time+'</span>':'')
     +'<span class="'+cc+'">'+(expRet>=0?'+':'')+expRet.toFixed(1)+'%</span>'
     +'<span class="pred-tag '+pred+'"><em>趋势</em> '+(DIR_MAP[pred]||pred)+'</span>'
     +spotLabel
@@ -340,7 +344,7 @@ let _historyCache={};
 async function openDetail(detailStr){
   const d=JSON.parse(decodeURIComponent(detailStr));
   const code=d.code;
-  const price=d.price, pred=d.pred, conf=d.conf||0.3;
+  const price=d.price, price_time=d.price_time||'', pred=d.pred, conf=d.conf||0.3;
   const ma5=d.ma5||price, ma10=d.ma10||price;
   const h10=d.high_10d||price, l10=d.low_10d||price;
   const volR=d.vol_ratio||1, score=d.score||0;
@@ -375,7 +379,7 @@ async function openDetail(detailStr){
 
   // === 📊 预测概要 ===
   html+='<div class="det-sec"><div class="det-title">📊 预测概要</div>';
-  html+='<div class="det-grid"><span class="k">现价</span><span class="v fw">'+fmt(price)+'</span>';
+  html+='<div class="det-grid"><span class="k">现价</span><span class="v fw">'+fmt(price)+(price_time?' <span style="font-size:.65em;color:#64748b">'+price_time+'</span>':'')+'</span>';
   html+='<span class="k">趋势预测</span><span class="v"><span class="pred-tag '+pred+'">'+(DIR_MAP[pred]||pred)+'</span></span>';
   html+='<span class="k">置信度</span><span class="v">'+(conf*100).toFixed(0)+'% <span class="cf-bar"><i style="width:'+(conf*100)+'%"></i></span></span>';
   html+='<span class="k">时点</span><span class="v">📍'+(SPOT_MAP[d.spotDir]||d.spotDir||'--')+'</span>';
@@ -425,11 +429,12 @@ async function openDetail(detailStr){
   }
   const hist=_historyCache[code]||[];
   if(hist.length){
-    html+='<table class="history-table"><tr><th>时间</th><th>趋势</th><th>实际价</th><th>趋势✓</th><th>时点✓</th></tr>';
+    html+='<table class="history-table"><tr><th>预测时间</th><th>趋势</th><th>实际价</th><th>价时</th><th>趋势✓</th><th>时点✓</th></tr>';
     hist.forEach(r=>{
       const tOk=r.correct===1?'ok':r.correct===0?'fail':'';
       const sOk=r.spot_correct===1?'ok':r.spot_correct===0?'fail':'';
-      html+='<tr><td>'+r.time+'</td><td>'+(DIR_MAP[r.pred]||r.pred)+'</td><td>'+fmt(r.actual)+'</td><td class="'+tOk+'">'+(r.correct===1?'✅':r.correct===0?'❌':'--')+'</td><td class="'+sOk+'">'+(r.spot_correct===1?'✅':r.spot_correct===0?'❌':'--')+'</td></tr>';
+      const atime=(r.actual_time||'').substring(0,10);
+      html+='<tr><td>'+r.time+'</td><td>'+(DIR_MAP[r.pred]||r.pred)+'</td><td>'+fmt(r.actual)+'</td><td style="font-size:.7em;color:#64748b">'+atime+'</td><td class="'+tOk+'">'+(r.correct===1?'✅':r.correct===0?'❌':'--')+'</td><td class="'+sOk+'">'+(r.spot_correct===1?'✅':r.spot_correct===0?'❌':'--')+'</td></tr>';
     });
     html+='</table>';
   }else{
@@ -461,7 +466,7 @@ function renderSkillLog(){
   log.forEach(l=>{
     html+='<div style="font-size:.8em;padding:4px 0;border-bottom:1px solid #334155">';
     html+='<span style="color:#64748b">'+l.time+'</span> ';
-    html+='<span style="background:#334155;padding:1px 6px;border-radius:4px;margin-right:4px">'+l.event+'</span>';
+    html+='<span style="background:#334155;padding:1px 6px;border-radius:4px;margin-right:4px">'+(l.type||l.event)+'</span>';
     html+='<span>'+l.desc+'</span></div>';
   });
   document.getElementById('evoLogPanel').innerHTML=html;

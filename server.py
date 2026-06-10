@@ -44,7 +44,7 @@ def get_history(code, limit=50):
     conn.row_factory = sqlite3.Row
     rows = conn.execute("""
         SELECT ts_code, stock_name, direction as pred, pred_time as time, confidence,
-               pred_note, actual_close as actual, correct, spot_correct
+               pred_note, actual_close as actual, actual_time, correct, spot_correct
         FROM predictions WHERE ts_code=?
           AND actual_close IS NOT NULL
         ORDER BY pred_time DESC LIMIT ?
