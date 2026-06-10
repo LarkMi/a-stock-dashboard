@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
 gen_dashboard.py — 生成增强版A股分析看板
-v5: 移动优先双行卡片+图例+详细弹窗
-v6: 趋势/时点双标签清晰展示
+v7: 新增美股隔夜数据 + 多因子拆解面板 + CSV批量导入 + 自定义分组
 """
 import sys, os, json
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -10,10 +9,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 OUTPUT = r"C:\Users\LarkMi\AppData\Local\hermes\dashboard.html"
 
 def generate():
-    """完整流程：跑分析 + 生成看板（供cron/manual调用）。
-    run_analysis() 已内置自动生成看板，此处仅做入口包装。"""
+    """完整流程：跑分析 + 生成看板（供cron/manual调用）"""
     from market_watcher import run_analysis
-    return run_analysis()  # 内部已调用 generate_html_from_results
+    return run_analysis()
 
 
 def generate_html_from_results(r, h, locked, evo_log):
@@ -60,7 +58,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="zh">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>📊 A股分析看板 v6</title>
+<title>📊 A股分析看板 v7</title>
 <style>
 /* ===== 基础 ===== */
 *{margin:0;padding:0;box-sizing:border-box}
@@ -76,6 +74,18 @@ h2{font-size:1.1em;margin:12px 0 8px;color:#94a3b8}
 .bull{background:#064e3b;color:#6ee7b7}
 .bear{background:#450a0a;color:#fca5a5}
 .neutral{background:#1e3a5f;color:#93c5fd}
+
+/* ===== 🆕 美股隔夜数据卡片 ===== */
+.us-overnight{background:#1e293b;border-radius:12px;padding:12px;margin-bottom:16px;display:none}
+.us-overnight.show{display:block}
+.us-overnight .us-title{font-size:.85em;color:#64748b;margin-bottom:10px}
+.us-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(80px,1fr));gap:8px}
+.us-card{background:#0f172a;border-radius:8px;padding:8px 10px;text-align:center}
+.us-card .us-label{font-size:.7em;color:#64748b;margin-bottom:4px}
+.us-card .us-val{font-size:.95em;font-weight:700}
+.us-card .us-sub{font-size:.65em;color:#475569;margin-top:2px}
+.us-up{color:#f87171}
+.us-down{color:#4ade80}
 
 /* ===== 准确率面板 ===== */
 .acc-panel{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:8px;margin-bottom:16px}
@@ -130,6 +140,19 @@ h2{font-size:1.1em;margin:12px 0 8px;color:#94a3b8}
 .factors{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:16px;font-size:.75em}
 .factors span{background:#1e293b;padding:4px 10px;border-radius:6px;color:#94a3b8}
 
+/* ===== 🆕 因子拆解面板（弹窗内） ===== */
+.factor-dims{margin-top:8px}
+.factor-dim{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:.8em}
+.factor-dim .dim-label{min-width:36px;color:#94a3b8}
+.factor-dim .dim-bar-wrap{flex:1;height:18px;background:#0f172a;border-radius:4px;overflow:hidden;display:flex}
+.factor-dim .dim-pos{height:100%;transition:width .3s}
+.factor-dim .dim-neg{height:100%;transition:width .3s}
+.factor-dim .dim-val{min-width:32px;text-align:right;font-weight:600;font-size:.75em}
+.dim-tech .dim-pos{background:#f59e0b} .dim-tech .dim-neg{background:#92400e}
+.dim-msg .dim-pos{background:#6366f1} .dim-msg .dim-neg{background:#312e81}
+.dim-sent .dim-pos{background:#ec4899} .dim-sent .dim-neg{background:#831843}
+.dim-macro .dim-pos{background:#06b6d4} .dim-macro .dim-neg{background:#155e75}
+
 /* ===== 自定义标的面板 ===== */
 .locked-panel{background:#1e293b;border-radius:12px;padding:12px;margin-bottom:16px}
 .locked-panel h3{margin-bottom:8px}
@@ -142,6 +165,17 @@ h2{font-size:1.1em;margin:12px 0 8px;color:#94a3b8}
 .search-results{max-height:200px;overflow-y:auto;margin-top:8px}
 .search-results .sr-item{padding:8px;border-bottom:1px solid #334155;cursor:pointer;display:flex;justify-content:space-between}
 .search-results .sr-item:active{background:#334155}
+
+/* ===== 🆕 CSV导入 + 分组标签 ===== */
+.csv-import{margin-top:12px;padding-top:10px;border-top:1px solid #334155}
+.csv-import .csv-label{font-size:.8em;color:#64748b;margin-bottom:6px}
+.csv-import input[type=file]{font-size:.8em;color:#94a3b8}
+.csv-import .csv-btn{background:#334155;color:#e2e8f0;border:none;padding:6px 14px;border-radius:6px;font-size:.85em;cursor:pointer;margin-left:8px}
+.csv-result{font-size:.75em;color:#4ade80;margin-top:4px}
+.group-tabs{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.group-tab{font-size:.75em;padding:4px 12px;border-radius:14px;background:#0f172a;color:#94a3b8;cursor:pointer;border:1px solid #334155}
+.group-tab.active{background:#1d4ed8;color:#fff;border-color:#1d4ed8}
+.group-tab .del{font-size:.85em;margin-left:4px;color:#f87171;cursor:pointer}
 
 /* ===== 弹窗 ===== */
 .modal-overlay{display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.7);z-index:100;justify-content:center;align-items:center}
@@ -160,7 +194,7 @@ h2{font-size:1.1em;margin:12px 0 8px;color:#94a3b8}
 .modal .close-btn{background:#334155;color:#e2e8f0;border:none;padding:8px 20px;border-radius:8px;font-size:16px;cursor:pointer;margin-top:12px;float:right}
 .modal .section-title{font-size:.9em;color:#94a3b8;margin:12px 0 6px;border-bottom:1px solid #334155;padding-bottom:4px}
 
-/* ===== 🆕 增强弹窗 ===== */
+/* ===== 增强弹窗 ===== */
 .det-sec{margin-bottom:14px}
 .det-title{font-size:.9em;color:#94a3b8;margin:0 0 8px;border-bottom:1px solid #334155;padding-bottom:4px}
 .det-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;font-size:.82em}
@@ -183,6 +217,7 @@ h2{font-size:1.1em;margin:12px 0 8px;color:#94a3b8}
 @media(min-width:768px){
   body{max-width:700px;margin:0 auto}
   .section.long,.section.short{display:grid;grid-template-columns:1fr;gap:0}
+  .us-grid{grid-template-columns:repeat(4,1fr)}
 }
 @media(min-width:1024px){
   body{max-width:900px}
@@ -190,6 +225,7 @@ h2{font-size:1.1em;margin:12px 0 8px;color:#94a3b8}
 </style>
 </head>
 <body>
+<div id="usOvernight" class="us-overnight"></div>
 <div id="meta" class="meta"></div>
 <div id="accPanel" class="acc-panel"></div>
 <div class="legend">
@@ -214,7 +250,7 @@ const E_SHORT={strong_down:'💥',down:'📉',neutral:'➡️'};
 
 function fmt(v){if(v===null||v===undefined||v==='N/A')return'N/A';const n=Number(v);return isNaN(n)?v:n.toFixed(n<10?2:0)}
 
-(function render(){
+(async function render(){
   // Meta
   const m=DATA.meta;
   let meta='<span>🕐'+m.time+'</span>';
@@ -225,6 +261,8 @@ function fmt(v){if(v===null||v===undefined||v==='N/A')return'N/A';const n=Number
   meta+='<span>📍'+m.phase+'</span>';
   document.getElementById('meta').innerHTML=meta;
 
+  renderUSOvernight();
+  await loadGroups();
   renderLocked();
 
   // Accuracy panel
@@ -302,17 +340,143 @@ function row(s,i,isLong){
     +'</div></div>';
 }
 
+// ===== 🆕 美股隔夜数据渲染 =====
+async function renderUSOvernight(){
+  try{
+    const resp=await fetch('/api/us-overnight');
+    const d=await resp.json();
+    if(!d.ok||!d.data) return;
+    const ud=d.data;
+    // 检查是否全部为null
+    const hasData=ud.sp500_change!==null||ud.nasdaq_change!==null||ud.usdcny!==null||ud.vix!==null;
+    if(!hasData) return;
+    const panel=document.getElementById('usOvernight');
+    let h='<div class="us-title">🌍 全球市场 · 隔夜数据 <span style="font-size:.7em;color:#475569">'+((ud.update_time||'').substring(0,16))+'</span></div>';
+    h+='<div class="us-grid">';
+    const mkCard=(label,val,sub,cls)=>{
+      const c=val===null?'':'us-'+cls;
+      const v=val!==null?(val>=0?'+':'')+val.toFixed(2)+'%':'--';
+      sub=sub||'';
+      return '<div class="us-card"><div class="us-label">'+label+'</div><div class="us-val '+c+'">'+v+'</div><div class="us-sub">'+sub+'</div></div>';
+    };
+    h+=mkCard('S&P 500',ud.sp500_change,ud.sp500_close?'收盘 '+ud.sp500_close.toFixed(0):'',ud.sp500_change>=0?'up':'down');
+    h+=mkCard('Nasdaq',ud.nasdaq_change,ud.nasdaq_close?'收盘 '+ud.nasdaq_close.toFixed(0):'',ud.nasdaq_change>=0?'up':'down');
+    const fxVal=ud.usdcny!==null?ud.usdcny.toFixed(4):null;
+    h+='<div class="us-card"><div class="us-label">USD/CNY</div><div class="us-val" style="color:#f8fafc">'+(fxVal||'--')+'</div><div class="us-sub">汇率</div></div>';
+    const vixDisp=ud.vix!==null?ud.vix.toFixed(1):'--';
+    h+='<div class="us-card"><div class="us-label">VIX</div><div class="us-val '+(ud.vix>25?'us-up':ud.vix<15?'us-down':'')+'" style="color:'+(ud.vix!==null?(ud.vix>25?'#f87171':ud.vix<15?'#4ade80':'#f8fafc'):'#64748b')+'">'+vixDisp+'</div><div class="us-sub">恐慌指数</div></div>';
+    h+='</div>';
+    panel.innerHTML=h;
+    panel.classList.add('show');
+  }catch(e){/* 静默失败 — 美股数据不可用时不显示 */}
+}
+
+// ===== 🆕 自定义分组渲染 =====
+let _customGroups=[];
+async function loadGroups(){
+  try{
+    const resp=await fetch('/api/custom-groups');
+    const d=await resp.json();
+    _customGroups=d.groups||[];
+  }catch(e){_customGroups=[]}
+}
+
 function renderLocked(){
   const panel=document.getElementById('lockedPanel');
   let html='<h3>📌 自定义标的 <span style="font-size:.8em;color:#64748b">('+DATA.custom.length+'只)</span></h3>';
-  html+='<div class="locked-grid">';
+
+  // 分组标签
+  if(_customGroups.length){
+    html+='<div class="group-tabs" id="groupTabs">';
+    html+='<span class="group-tab active" onclick="filterByGroup(\'\')">全部</span>';
+    _customGroups.forEach(g=>{
+      html+='<span class="group-tab" onclick="filterByGroup(\''+g.name+'\')">'+g.name+' <span class="del" onclick="event.stopPropagation();deleteGroup(\''+g.name+'\')">✕</span></span>';
+    });
+    html+='</div>';
+  }
+
+  html+='<div class="locked-grid" id="lockedGrid">';
   DATA.custom.forEach(s=>{
-    html+='<div class="locked-item"><span>'+s.name+'('+s.code+')</span><span class="remove" onclick="event.stopPropagation();removeLocked(\''+s.code+'\')">✕</span></div>';
+    const grp=s.group||'';
+    html+='<div class="locked-item" data-group="'+grp+'"><span>'+s.name+'('+s.code+')</span><span class="remove" onclick="event.stopPropagation();removeLocked(\''+s.code+'\')">✕</span></div>';
   });
   html+='</div>';
+
+  // 搜索
   html+='<div class="search-box"><input id="searchInput" placeholder="搜索股票代码/名称..." oninput="doSearch()"><button onclick="doSearch()">搜索</button></div>';
   html+='<div id="searchResults" class="search-results"></div>';
+
+  // CSV导入
+  html+='<div class="csv-import">';
+  html+='<div class="csv-label">📥 批量导入自定义标的 (CSV格式: code,name,group)</div>';
+  html+='<input type="file" id="csvFile" accept=".csv" onchange="doCSVImport()">';
+  html+='<button class="csv-btn" onclick="document.getElementById(\'csvFile\').click()">选择文件</button>';
+  html+='<span id="csvResult" class="csv-result"></span>';
+  html+='</div>';
+
+  // 新建分组
+  html+='<div class="search-box" style="margin-top:10px">';
+  html+='<input id="newGroupInput" placeholder="新建分组名称...">';
+  html+='<button onclick="createGroup()">+分组</button>';
+  html+='</div>';
+
   panel.innerHTML=html;
+}
+
+// ===== 🆕 分组筛选 =====
+function filterByGroup(name){
+  document.querySelectorAll('#lockedGrid .locked-item').forEach(el=>{
+    el.style.display=!name||el.dataset.group===name?'flex':'none';
+  });
+  document.querySelectorAll('.group-tab').forEach(t=>t.classList.remove('active'));
+  event.target.classList.add('active');
+}
+
+// ===== 🆕 创建分组 =====
+async function createGroup(){
+  const input=document.getElementById('newGroupInput');
+  const name=input.value.trim();
+  if(!name){alert('请输入分组名称');return}
+  const resp=await fetch('/api/custom-groups',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name,stocks:[]})});
+  const d=await resp.json();
+  if(d.ok){input.value='';location.reload()}
+  else alert(d.error||'创建失败');
+}
+
+// ===== 🆕 删除分组 =====
+async function deleteGroup(name){
+  if(!confirm('确认删除分组 "'+name+'"？标的不会删除'))return;
+  const resp=await fetch('/api/custom-groups?name='+encodeURIComponent(name),{method:'DELETE'});
+  const d=await resp.json();
+  if(d.ok) location.reload();
+  else alert(d.error||'删除失败');
+}
+
+// ===== 🆕 CSV批量导入 =====
+async function doCSVImport(){
+  const file=document.getElementById('csvFile').files[0];
+  if(!file) return;
+  const text=await file.text();
+  const lines=text.split('\n').filter(l=>l.trim());
+  if(lines.length<2){document.getElementById('csvResult').textContent='CSV为空或无表头';return}
+  // 解析 (code,name,group)
+  const stocks=[];
+  for(let i=1;i<lines.length;i++){
+    const parts=lines[i].split(',');
+    if(parts.length<1) continue;
+    const code=parts[0].trim();
+    if(!code) continue;
+    stocks.push({code,name:(parts[1]||'').trim(),group:(parts[2]||'').trim()});
+  }
+  if(!stocks.length){document.getElementById('csvResult').textContent='未解析到有效标的';return}
+  const resp=await fetch('/api/custom-stocks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({stocks})});
+  const d=await resp.json();
+  if(d.ok){
+    document.getElementById('csvResult').textContent='✅ 导入 '+d.added+' 只，跳过 '+d.skipped+' 只（重复）';
+    setTimeout(()=>location.reload(),800);
+  }else{
+    document.getElementById('csvResult').textContent='❌ '+((d.error)||'导入失败');
+  }
 }
 
 async function doSearch(){
@@ -341,6 +505,24 @@ async function removeLocked(code){
 }
 
 let _historyCache={};
+let _factorCache=null;
+
+// ===== 🆕 加载因子快照缓存 =====
+async function loadFactorCache(){
+  if(_factorCache) return _factorCache;
+  try{
+    const resp=await fetch('/api/factors');
+    const d=await resp.json();
+    if(d.ok&&d.snapshots){
+      // 转为 code→factor map
+      const map={};
+      d.snapshots.forEach(s=>{map[s.ts_code]=s});
+      _factorCache=map;
+    }else{_factorCache={};}
+  }catch(e){_factorCache={};}
+  return _factorCache;
+}
+
 async function openDetail(detailStr){
   const d=JSON.parse(decodeURIComponent(detailStr));
   const code=d.code;
@@ -350,11 +532,9 @@ async function openDetail(detailStr){
   const volR=d.vol_ratio||1, score=d.score||0;
   const chg1=d.chg_1d||0, chg3=d.chg_3d||0, chg5=d.chg||0;
 
-  // 均线状态文本
   const above=price>ma5;
   const maState=price>ma5&&ma5>ma10?'🟢 多头排列（强势）':price<ma5&&ma5<ma10?'🔴 空头排列（弱势）':price>ma5?'🟡 站上MA5但MA5<MA10（震荡偏强）':price<ma5?'🟡 跌破MA5但MA5>MA10（震荡偏弱）':'⚪ 均线纠缠（方向不明）';
 
-  // 量价判断
   let volNote='量能正常';
   if(volR>2) volNote='🔥 爆量('+volR.toFixed(1)+'x)，多空分歧剧烈';
   else if(volR>1.5) volNote='📈 放量('+volR.toFixed(1)+'x)，交投活跃';
@@ -398,7 +578,65 @@ async function openDetail(detailStr){
   html+='<span class="k">关键位</span><span class="v">支撑 '+fmt(l10)+' | 阻力 '+fmt(h10)+'</span>';
   html+='</div></div>';
 
-  // === 🔍 信号拆解 ===
+  // === 🆕 🔬 多因子拆解 (从 factor_snapshots 读取) ===
+  const fmap=await loadFactorCache();
+  const fs=fmap[code];
+  if(fs){
+    const dims=[
+      {label:'📐技术',key:'tech_score',cls:'dim-tech'},
+      {label:'📰消息',key:'message_score',cls:'dim-msg'},
+      {label:'💬情绪',key:'sentiment_score',cls:'dim-sent'},
+      {label:'🌍宏观',key:'macro_score',cls:'dim-macro'},
+    ];
+    html+='<div class="det-sec"><div class="det-title">🔬 多因子拆解 <span style="font-size:.75em;color:#64748b">(综合分: '+(fs.total_score!=null?(fs.total_score>=0?'+':'')+fs.total_score.toFixed(1):'N/A')+')</span></div>';
+    html+='<div class="factor-dims">';
+    dims.forEach(dim=>{
+      const val=fs[dim.key];
+      if(val===null||val===undefined){
+        html+='<div class="factor-dim"><span class="dim-label">'+dim.label+'</span><span style="font-size:.7em;color:#64748b">暂无数据</span></div>';
+        return;
+      }
+      // 正值=偏多, 负值=偏空
+      const absV=Math.abs(val);
+      const maxV=5; // 满分±5
+      const pct=Math.min(absV/maxV*100,100);
+      const posW=val>0?pct:0;
+      const negW=val<0?pct:0;
+      const vColor=val>0?'color:#f87171':val<0?'color:#4ade80':'color:#94a3b8';
+      html+='<div class="factor-dim '+dim.cls+'">';
+      html+='<span class="dim-label">'+dim.label+'</span>';
+      html+='<div class="dim-bar-wrap"><div class="dim-pos" style="width:'+posW+'%"></div><div class="dim-neg" style="width:'+negW+'%"></div></div>';
+      html+='<span class="dim-val" style="'+vColor+'">'+(val>=0?'+':'')+val.toFixed(1)+'</span>';
+      html+='</div>';
+    });
+
+    // 子因子详情（如果有的话）
+    if(fs.tech_factors||fs.message_factors||fs.sentiment_factors||fs.macro_factors){
+      html+='<div style="margin-top:8px;font-size:.7em;color:#64748b">';
+      const parseFactors=(jsonStr)=>{
+        if(!jsonStr) return null;
+        try{return typeof jsonStr==='string'?JSON.parse(jsonStr):jsonStr}catch(e){return null}
+      };
+      const renderSubFactors=(label,facs)=>{
+        if(!facs||!Object.keys(facs).length) return '';
+        let h='<div style="margin:4px 0"><b>'+label+'</b>: ';
+        Object.entries(facs).forEach(([k,v])=>{
+          const c=typeof v==='number'?(v>=0?'red':'green'):'';
+          h+='<span class="'+c+'">'+k+' '+(typeof v==='number'?(v>=0?'+':'')+v.toFixed(1):v)+'</span> ';
+        });
+        h+='</div>';
+        return h;
+      };
+      html+=renderSubFactors('技术',parseFactors(fs.tech_factors));
+      html+=renderSubFactors('消息',parseFactors(fs.message_factors));
+      html+=renderSubFactors('情绪',parseFactors(fs.sentiment_factors));
+      html+=renderSubFactors('宏观',parseFactors(fs.macro_factors));
+      html+='</div>';
+    }
+    html+='</div></div>';
+  }
+
+  // === 🔍 信号拆解（原有逻辑） ===
   html+='<div class="det-sec"><div class="det-title">🔍 信号拆解 <span style="font-size:.75em;color:#64748b">(综合分: '+(score>=0?'+':'')+score.toFixed(1)+')</span></div>';
   if(bullSigs.length){
     html+='<div class="sig-row bull"><span class="sig-label">🟢 偏多</span>';

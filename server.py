@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
-server.py — 静态文件服务 + 锁定标的管理API
+server.py — 静态文件服务 + 锁定标的管理API + 美股隔夜数据 + 自定义分组 + 因子数据
+v2: 新增 /api/us-overnight, /api/custom-groups, /api/custom-stocks, /api/evolution-log, /api/factors
 """
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 import json, os, mimetypes, urllib.parse, traceback, sqlite3, sys
+from datetime import datetime
 
 # 加载scripts目录（market_watcher等模块位置）
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "scripts"))
@@ -12,6 +14,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "scr
 PORT = 8888
 BASE = r"C:\Users\LarkMi\AppData\Local\hermes"
 LOCKED_FILE = os.path.join(BASE, "data", "custom_stocks.json")
+GROUPS_FILE = os.path.join(BASE, "data", "custom_groups.json")
 LOOKUP_FILE = os.path.join(BASE, "data", "stock_lookup.json")
 STATE_DB = os.path.join(BASE, "data", "market_watcher_state.db")
 
@@ -60,14 +63,12 @@ def get_stock_stats(code):
                 "spot_total": 0, "spot_correct": 0, "spot_accuracy": None}
     conn = sqlite3.connect(STATE_DB)
     c = conn.cursor()
-    # 去掉后缀查stock_performance
     short_code = code.split('.')[0]
     c.execute("""SELECT total_preds, correct_preds, accuracy,
                         COALESCE(spot_total,0), COALESCE(spot_correct,0),
                         COALESCE(spot_accuracy,0)
                  FROM stock_performance WHERE ts_code=?""", (short_code,))
     r = c.fetchone()
-    # 最近7天预测数
     c.execute("""SELECT COUNT(*) FROM predictions 
                  WHERE ts_code=? AND pred_time >= datetime('now','localtime','-7 days')""",
               (code,))
@@ -91,6 +92,134 @@ def write_locked(data):
     with open(LOCKED_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+# ===== 🆕 自定义分组管理 =====
+def read_groups():
+    if not os.path.exists(GROUPS_FILE):
+        return {"groups": []}
+    with open(GROUPS_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+def write_groups(data):
+    os.makedirs(os.path.dirname(GROUPS_FILE), exist_ok=True)
+    with open(GROUPS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def upsert_group(name, stocks):
+    """创建或更新分组。stocks: [{code, name}]"""
+    data = read_groups()
+    for g in data["groups"]:
+        if g["name"] == name:
+            g["stocks"] = stocks
+            g["updated_at"] = datetime.now().isoformat()
+            write_groups(data)
+            return {"ok": True, "group": g}
+    # 新建
+    new_group = {"name": name, "stocks": stocks, "created_at": datetime.now().isoformat()}
+    data["groups"].append(new_group)
+    write_groups(data)
+    return {"ok": True, "group": new_group}
+
+def delete_group(name):
+    data = read_groups()
+    before = len(data["groups"])
+    data["groups"] = [g for g in data["groups"] if g["name"] != name]
+    if len(data["groups"]) == before:
+        return {"ok": False, "error": f"分组 '{name}' 不存在"}
+    write_groups(data)
+    return {"ok": True}
+
+# ===== 🆕 美股隔夜数据 =====
+def init_overnight_table():
+    """确保 us_overnight_cache 表存在"""
+    if not os.path.exists(STATE_DB):
+        return
+    conn = sqlite3.connect(STATE_DB)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS us_overnight_cache (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sp500_change REAL,
+            nasdaq_change REAL,
+            usdcny REAL,
+            vix REAL,
+            sp500_close REAL,
+            nasdaq_close REAL,
+            update_time TEXT,
+            source TEXT DEFAULT 'web_search'
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def get_us_overnight():
+    """读取最新美股隔夜数据，返回 dict 或 None"""
+    if not os.path.exists(STATE_DB):
+        return None
+    conn = sqlite3.connect(STATE_DB)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("""
+        SELECT sp500_change, nasdaq_change, usdcny, vix,
+               sp500_close, nasdaq_close, update_time
+        FROM us_overnight_cache ORDER BY id DESC LIMIT 1
+    """).fetchone()
+    conn.close()
+    if row:
+        d = dict(row)
+        # 全部为NULL则返回None
+        if all(v is None for k, v in d.items() if k != 'update_time'):
+            return None
+        return d
+    return None
+
+# ===== 🆕 因子快照数据 =====
+def get_factor_snapshots():
+    """读取最新一批因子快照（用于看板因子拆解面板）"""
+    if not os.path.exists(STATE_DB):
+        return []
+    conn = sqlite3.connect(STATE_DB)
+    conn.row_factory = sqlite3.Row
+    # 先检查表是否存在
+    exists = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='factor_snapshots'"
+    ).fetchone()
+    if not exists:
+        conn.close()
+        return []
+    # 获取最新一批快照的时间戳
+    latest_time = conn.execute(
+        "SELECT MAX(snapshot_time) FROM factor_snapshots"
+    ).fetchone()[0]
+    if not latest_time:
+        conn.close()
+        return []
+    rows = conn.execute("""
+        SELECT ts_code, stock_name, tech_score, message_score, sentiment_score, macro_score,
+               total_score, pred_direction, confidence, snapshot_time,
+               tech_factors, message_factors, sentiment_factors, macro_factors
+        FROM factor_snapshots WHERE snapshot_time = ?
+        ORDER BY ABS(total_score) DESC
+    """, (latest_time,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+# ===== 🆕 自进化日志 =====
+def get_evolution_log(limit=20):
+    if not os.path.exists(STATE_DB):
+        return []
+    conn = sqlite3.connect(STATE_DB)
+    conn.row_factory = sqlite3.Row
+    exists = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='evolution_log'"
+    ).fetchone()
+    if not exists:
+        conn.close()
+        return []
+    rows = conn.execute(
+        "SELECT * FROM evolution_log ORDER BY id DESC LIMIT ?", (limit,)
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 class Handler(BaseHTTPRequestHandler):
     def cors(self):
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -112,7 +241,6 @@ class Handler(BaseHTTPRequestHandler):
     def _file(self, path):
         full = os.path.join(BASE, path.lstrip("/"))
         full = os.path.normpath(full)
-        # 安全检查
         if not full.lower().startswith(BASE.lower()):
             self.send_error(403)
             return
@@ -139,9 +267,9 @@ class Handler(BaseHTTPRequestHandler):
             q = qs.get("q", [""])[0].strip()
             self._json(200, search_stocks(q))
         elif path == "/api/skill-log":
-            from market_watcher import get_evolution_log
+            from market_watcher import get_evolution_log as mw_evo_log
             limit = int(qs.get("limit", [20])[0])
-            self._json(200, get_evolution_log(limit))
+            self._json(200, mw_evo_log(limit))
         elif path == "/api/debug":
             self._json(200, {"lookup_count": len(_stock_lookup), "locked_file": LOCKED_FILE, "lookup_file": LOOKUP_FILE})
         elif path == "/api/history":
@@ -156,13 +284,29 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(400, {"error": "code required"})
                 return
             self._json(200, get_stock_stats(code))
+        # ===== 🆕 新增 GET 端点 =====
+        elif path == "/api/us-overnight":
+            data = get_us_overnight()
+            self._json(200, {"ok": True, "data": data})
+        elif path == "/api/custom-groups":
+            self._json(200, read_groups())
+        elif path == "/api/evolution-log":
+            limit = int(qs.get("limit", [20])[0])
+            self._json(200, get_evolution_log(limit))
+        elif path == "/api/factors":
+            self._json(200, {"ok": True, "snapshots": get_factor_snapshots()})
         elif path == "/" or path == "":
             self._file("/dashboard.html")
         else:
             self._file(path)
 
     def do_POST(self):
-        if self.path == "/api/refresh":
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+        length = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(length)) if length else {}
+
+        if path == "/api/refresh":
             try:
                 import subprocess
                 result = subprocess.run(
@@ -170,16 +314,14 @@ class Handler(BaseHTTPRequestHandler):
                     capture_output=True, text=True, timeout=60, cwd=r"C:\Users\LarkMi\AppData\Local\hermes\scripts"
                 )
                 ok = result.returncode == 0
-                from market_watcher import get_evolution_log
-                evo_log = get_evolution_log(5)
+                from market_watcher import get_evolution_log as mw_evo_log
+                evo_log = mw_evo_log(5)
                 self._json(200, {"ok": ok, "output": result.stdout.strip(),
                                  "error": result.stderr.strip() if not ok else None,
                                  "skill_log": evo_log})
             except Exception as e:
                 self._json(500, {"ok": False, "error": str(e)})
-        elif self.path == "/api/analyze-custom":
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+        elif path == "/api/analyze-custom":
             code = body.get("code", "").strip()
             if not code:
                 self._json(400, {"error": "code required"})
@@ -190,9 +332,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True, "analysis": result})
             except Exception as e:
                 self._json(500, {"ok": False, "error": str(e)})
-        elif self.path == "/api/locked":
-            length = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(length)) if length else {}
+        elif path == "/api/locked":
             code = body.get("code", "").strip()
             name = body.get("name", "").strip()
             reason = body.get("reason", "").strip()
@@ -206,14 +346,61 @@ class Handler(BaseHTTPRequestHandler):
                     return
             data["locked"].append({"code": code, "name": name, "reason": reason})
             write_locked(data)
-            # 自动分析新添加的自定义标的
             analysis = None
             try:
                 from market_watcher import analyze_single_stock
                 analysis = analyze_single_stock(code)
             except Exception:
-                pass  # 分析失败不影响添加
+                pass
             self._json(200, {"ok": True, "locked": data["locked"], "analysis": analysis})
+        # ===== 🆕 新增 POST 端点 =====
+        elif path == "/api/custom-groups":
+            name = body.get("name", "").strip()
+            stocks = body.get("stocks", [])
+            if not name:
+                self._json(400, {"error": "group name required"})
+                return
+            result = upsert_group(name, stocks)
+            self._json(200, result)
+        elif path == "/api/custom-stocks":
+            # 批量添加自定义标的: {stocks: [{code, name, group?}]}
+            stocks = body.get("stocks", [])
+            if not stocks:
+                self._json(400, {"error": "stocks array required"})
+                return
+            data = read_locked()
+            added, skipped = 0, 0
+            existing_codes = {s["code"] for s in data["locked"]}
+            for s in stocks:
+                code = s.get("code", "").strip()
+                if not code:
+                    continue
+                if code in existing_codes:
+                    skipped += 1
+                    continue
+                data["locked"].append({
+                    "code": code,
+                    "name": s.get("name", code),
+                    "reason": s.get("reason", ""),
+                    "group": s.get("group", "")
+                })
+                existing_codes.add(code)
+                added += 1
+            write_locked(data)
+            # 如果指定了分组，同时更新分组
+            group_name = body.get("group", "").strip()
+            if group_name and stocks:
+                groups_data = read_groups()
+                group_stocks = []
+                for g in groups_data.get("groups", []):
+                    if g["name"] == group_name:
+                        group_stocks = g.get("stocks", [])
+                        break
+                for s in stocks:
+                    if s.get("code", "").strip():
+                        group_stocks.append({"code": s["code"], "name": s.get("name", s["code"])})
+                upsert_group(group_name, group_stocks)
+            self._json(200, {"ok": True, "added": added, "skipped": skipped, "total": len(data["locked"])})
         else:
             self.send_error(404)
 
@@ -226,8 +413,8 @@ class Handler(BaseHTTPRequestHandler):
     
     def _do_DELETE(self):
         parsed = urllib.parse.urlparse(self.path)
+        qs = urllib.parse.parse_qs(parsed.query)
         if parsed.path == "/api/locked":
-            qs = urllib.parse.parse_qs(parsed.query)
             code = qs.get("code", [""])[0].strip()
             if not code:
                 self._json(400, {"error": "code required"})
@@ -240,6 +427,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             write_locked(data)
             self._json(200, {"ok": True, "locked": data["locked"]})
+        # ===== 🆕 新增 DELETE 端点 =====
+        elif parsed.path == "/api/custom-groups":
+            name = qs.get("name", [""])[0].strip()
+            if not name:
+                self._json(400, {"error": "group name required"})
+                return
+            result = delete_group(name)
+            self._json(200 if result["ok"] else 404, result)
         else:
             self.send_error(404)
 
@@ -248,6 +443,7 @@ class ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
 
 if __name__ == "__main__":
     load_lookup()
+    init_overnight_table()
     print(f"📡 服务启动: http://localhost:{PORT}")
     print(f"📁 根目录: {BASE}")
     print(f"📊 股票库: {len(_stock_lookup)} 只")

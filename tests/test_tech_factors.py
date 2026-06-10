@@ -199,19 +199,23 @@ class TestPositionFactor:
         assert score > 0.9
 
     def test_synthetic_bottom(self):
-        """收盘在最低价 → -1.0"""
-        highs = np.array([10, 12, 11, 13, 14, 15], dtype=float)
-        lows = np.array([8, 9, 9, 10, 11, 12], dtype=float)
-        score = factor_position(highs, lows, 12.0)
-        assert score < -0.9
+        """收盘在最低价 → -1.0 (≥10天确保[-10:]窗口生效)"""
+        # 15天数据, 第15天在多日最低点收盘
+        highs = np.array([20,19,18,17,16,15,14,13,12,11,10,11,12,13,14], dtype=float)
+        lows  = np.array([18,17,16,15,14,13,12,11,10,9, 8, 9, 10,11,12], dtype=float)
+        # h10=max(highs[-10:])=14, l10=min(lows[-10:])=8, close=8
+        # pos_pct=(8-8)/(14-8)*100=0, score=(0-50)/50=-1.0
+        score = factor_position(highs, lows, 8.0)
+        assert score == pytest.approx(-1.0, abs=0.01)
 
     def test_synthetic_mid(self):
-        """收盘在中间 → ~0"""
-        highs = np.array([10, 12, 11, 13, 14, 15], dtype=float)
-        lows = np.array([8, 9, 9, 10, 11, 12], dtype=float)
-        # h10=15, l10=12, mid=13.5
-        score = factor_position(highs, lows, 13.5)
-        assert abs(score) < 0.15
+        """收盘在中间 → ~0 (≥10天确保[-10:]窗口生效)"""
+        highs = np.array([20,19,18,17,16,15,14,13,12,11,10,11,12,13,14], dtype=float)
+        lows  = np.array([10,9,8,7,6,5,4,3,2,1,0,1,2,3,4], dtype=float)
+        # h10=max(highs[-10:])=15, l10=min(lows[-10:])=0, close=7.5(中点)
+        # pos_pct=(7.5-0)/(15-0)*100=50, score=(50-50)/50=0
+        score = factor_position(highs, lows, 7.5)
+        assert abs(score) < 0.05
 
     def test_hand_calc_midpoint(self):
         """手工计算: pos_pct=50 → score=0"""
@@ -403,28 +407,31 @@ class TestBoundaries:
         """退市/停牌标的: close≤0 应返回None层的空结果"""
         # 找一个历史上已退市的标的测试
         # 模拟: 直接测试 _check_invalid 和 _empty_result
-        assert _check_invalid(0.0) is True
-        assert _check_invalid(-1.0) is True
-        assert _check_invalid(np.nan) is True
-        assert _check_invalid(10.5) is False
+        assert _check_invalid(0.0) == True
+        assert _check_invalid(-1.0) == True
+        assert _check_invalid(np.nan) == True  # 用==而非is, 兼容np.bool_
+        assert _check_invalid(10.5) == False
 
     def test_limit_up_stock(self, conn):
-        """涨停标的(检查因子仍能返回正常值)"""
-        # 603986在6/9涨5.59%, 6/5跌7.8%, 找最近的涨跌停日
-        # 先查一下有没有涨跌停的
-        rows = conn.execute("""
+        """涨停标的(使用cutoff_date匹配涨跌停日)"""
+        # 找一个最近涨跌停日
+        row = conn.execute("""
             SELECT ts_code, trade_date, close, pct_chg
             FROM daily_adj WHERE abs(pct_chg) >= 9.9
             AND trade_date >= '20250501'
-            LIMIT 3
-        """).fetchall()
-        if not rows:
+            LIMIT 1
+        """).fetchone()
+        if not row:
             pytest.skip("近期无涨跌停标的, 跳过")
-        code = rows[0][0]
-        result = compute_tech_factors(conn, code)
-        # 涨跌停标的可能因子为0(volume量价因子)或正常值
-        assert result['volume'] == 0.0 or result['volume'] is not None, \
-            "涨跌停当日volume应为0"
+        code, trade_date = row[0], row[1]
+        # 转换 trade_date 为 YYYY-MM-DD
+        cutoff = f"{str(trade_date)[:4]}-{str(trade_date)[4:6]}-{str(trade_date)[6:8]}"
+        result = compute_tech_factors(conn, code, cutoff_date=cutoff)
+        if result['trend'] is None:
+            pytest.skip(f"{code} 在 {cutoff} 数据不足")
+        # 涨跌停当日 volume因子应为0(无量价意义)
+        assert result['volume'] == 0.0, \
+            f"涨跌停当日volume应为0, 实际{result['volume']}"
         assert result['indicators']['is_limit'] is True
 
     def test_data_with_nan_close(self):
@@ -458,12 +465,12 @@ class TestBoundaries:
 
     def test_check_invalid_various(self):
         """_check_invalid 全面测试"""
-        assert _check_invalid(0.0) is True
-        assert _check_invalid(-0.01) is True
-        assert _check_invalid(-100.0) is True
-        assert _check_invalid(np.nan) is True
-        assert _check_invalid(0.01) is False
-        assert _check_invalid(100.0) is False
+        assert _check_invalid(0.0) == True
+        assert _check_invalid(-0.01) == True
+        assert _check_invalid(-100.0) == True
+        assert _check_invalid(np.nan) == True  # 用==而非is, 兼容np.bool_
+        assert _check_invalid(0.01) == False
+        assert _check_invalid(100.0) == False
 
     def test_is_limit_hit_various(self):
         """_is_limit_hit 全面测试"""
@@ -785,17 +792,15 @@ class TestDataIntegrity:
 
     def test_no_future_data_in_cutoff(self, conn):
         """cutoff_date 不应泄露未来数据"""
-        # 用两个相差1天的cutoff，检查结果不同
-        r1 = compute_tech_factors(conn, "000001.SZ", cutoff_date="2024-06-01")
-        r2 = compute_tech_factors(conn, "000001.SZ", cutoff_date="2024-06-02")
+        # 用两个相邻交易日(非周末)，检查结果不同
+        r1 = compute_tech_factors(conn, "000001.SZ", cutoff_date="2024-06-03")
+        r2 = compute_tech_factors(conn, "000001.SZ", cutoff_date="2024-06-04")
 
         if r1['trend'] is not None and r2['trend'] is not None:
-            # 相邻日期结果不应完全相同
+            # 相邻交易日至少latest不同
             l1 = r1['indicators']['latest']
             l2 = r2['indicators']['latest']
-            # 可能相同(停牌)但指标组合不应完全一致
-            # 实际上pct_chg不同必然导致某些因子不同
-            assert (r1 != r2), "相邻日期的结果不应完全一致"
+            assert l1 != l2, f"相邻交易日latest应不同: {l1} vs {l2}"
 
     def test_survivorship_not_applicable(self, conn):
         """幸存者偏差: DuckDB包含全历史(含已退市股)，非仅当前存活"""
